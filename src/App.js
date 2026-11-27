@@ -8,6 +8,7 @@ import InvoiceHistory from './components/InvoiceHistory';
 import ScanSlip from './components/ScanSlip';
 import './theme.css';
 import useAnimatedNumber from './hooks/useAnimatedNumber';
+import { FEATURES } from './features';
 import usePersistentState from './hooks/usePersistentState';
 import { STORAGE_KEYS } from './utils/storage';
 import { downloadInvoiceHTML, printInvoice } from './utils/exportInvoice';
@@ -24,6 +25,8 @@ import {
   parseInvoiceSeq,
   todayISO,
   addDaysISO,
+  applyClientToInvoice,
+  migrateClients,
 } from './utils/invoice';
 
 // Fields compared to decide whether the open invoice has unsaved changes.
@@ -56,6 +59,12 @@ function App() {
     [rawSettings]
   );
   const [clients, setClients] = usePersistentState(STORAGE_KEYS.clients, DEFAULT_CLIENTS);
+  // Upgrade clients saved before "Default From location" existed
+  useEffect(() => {
+    const upgraded = migrateClients(clients);
+    if (upgraded.some((c, i) => c !== clients[i])) setClients(upgraded);
+    // eslint-disable-next-line
+  }, []);
   const [itemTemplates, setItemTemplates] = usePersistentState(STORAGE_KEYS.itemTemplates, DEFAULT_ITEM_TEMPLATES);
   const [invoices, setInvoices] = usePersistentState(STORAGE_KEYS.invoices, []);
   const [invoice, setInvoice] = usePersistentState(STORAGE_KEYS.draft, () => {
@@ -184,16 +193,7 @@ function App() {
   };
 
   // ---- clients / templates / settings ------------------------------------
-  const applyClient = (c) =>
-    setInvoice((prev) => ({
-      ...prev,
-      clientId: c.id,
-      clientName: c.name,
-      clientAddress: c.address,
-      gstNumber: c.gstNumber,
-      clientPhone: c.phone,
-      clientEmail: c.email,
-    }));
+  const applyClient = (c) => setInvoice((prev) => applyClientToInvoice(prev, c, clients));
 
   const saveClientFromInvoice = (updateExisting) => {
     const data = {
@@ -264,6 +264,7 @@ function App() {
 
   // Drop or paste an image anywhere on the page to scan it
   useEffect(() => {
+    if (!FEATURES.scan) return undefined;
     let depth = 0;
     const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
     const onEnter = (e) => {
@@ -356,7 +357,9 @@ function App() {
         <div className="toolbar-buttons">
           <button className="btn btn-light" onClick={newInvoice}>＋ New</button>
           <button className="btn btn-success" onClick={saveInvoice} title="Ctrl+S">Save</button>
-          <button className="btn btn-scan hide-mobile" onClick={() => openScan()} title="Fill items from a photo of a slip">📷 Scan</button>
+          {FEATURES.scan && (
+            <button className="btn btn-scan hide-mobile" onClick={() => openScan()} title="Fill items from a photo of a slip">📷 Scan</button>
+          )}
           <button className="btn btn-light" onClick={() => setModal('history')}>
             Invoices{invoices.length ? ` (${invoices.length})` : ''}
           </button>
@@ -389,13 +392,13 @@ function App() {
           onSaveClient={saveClientFromInvoice}
           onSaveTemplate={saveTemplateFromItem}
           onOpenSettings={openSettings}
-          onOpenScan={() => openScan()}
+          onOpenScan={FEATURES.scan ? () => openScan() : null}
         />
         <InvoicePreview ref={previewRef} invoiceData={invoice} settings={settings} />
       </div>
 
       {modal === 'clients' && (
-        <ClientManager clients={clients} setClients={setClients} onUseClient={applyClient} onClose={() => setModal(null)} />
+        <ClientManager clients={clients} setClients={setClients} onUseClient={applyClient} locations={settings.locations} onClose={() => setModal(null)} />
       )}
       {modal === 'settings' && (
         <SettingsPanel
@@ -418,7 +421,7 @@ function App() {
         />
       )}
 
-      {scanFiles && (
+      {FEATURES.scan && scanFiles && (
         <ScanSlip
           initialFiles={scanFiles}
           clients={clients}
@@ -432,7 +435,9 @@ function App() {
         />
       )}
 
-      <button className="fab" onClick={() => openScan()} aria-label="Scan a slip with the camera" title="Scan slip">📷</button>
+      {FEATURES.scan && (
+        <button className="fab" onClick={() => openScan()} aria-label="Scan a slip with the camera" title="Scan slip">📷</button>
+      )}
 
       {globalDrag && (
         <div className="global-drop">

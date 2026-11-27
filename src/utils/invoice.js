@@ -32,6 +32,12 @@ export const DEFAULT_SETTINGS = {
     'By signing this document, the customer agrees to the services and conditions described in this document.',
   defaultTruckNo: 'GJ21T5475',
   // Price dropdown options: ₹300, 350, 400 … 900 (+ "Custom…" to type any value)
+  // Places shown in the From / To dropdowns (plus "Custom…" for anything else)
+  locations: [
+    'Ichchapore', 'Hazira', 'Sachin', 'Hojiwala', 'Udhna', 'Pandesara', 'Bhestan', 'Surat', 'Kim', 'Kosamba',
+    'Palsana', 'Kadodara', 'Bardoli', 'Navsari', 'Valsad', 'Vapi', 'Silvassa', 'Daman', 'Umbergaon',
+    'Bharuch', 'Ankleshwar', 'Dahej', 'Vadodara', 'Ahmedabad', 'Mumbai',
+  ],
   priceMin: 300,
   priceMax: 900,
   priceStep: 50,
@@ -65,6 +71,7 @@ export const DEFAULT_CLIENTS = [
     gstNumber: 'GSTIN: 24AABCA9858J1ZC',
     phone: '',
     email: '',
+    defaultFrom: 'Ichchapore',
   },
   {
     id: 'giriraj',
@@ -125,6 +132,34 @@ export const makeItem = (overrides = {}, settings = DEFAULT_SETTINGS) => ({
   extraDetails: [], // [{ id, label, value }] — any extra line you want on the item
   ...overrides,
 });
+
+/** Fills "Bill To" from a client and applies the client's default From location to items. */
+export const applyClientToInvoice = (prev, client, clients = []) => {
+  const oldClient = clients.find((c) => c.id === prev.clientId);
+  const oldFrom = (oldClient && oldClient.defaultFrom) || '';
+  const newFrom = (client && client.defaultFrom) || '';
+  return {
+    ...prev,
+    clientId: client ? client.id : '',
+    clientName: client ? client.name : '',
+    clientAddress: client ? client.address : '',
+    gstNumber: client ? client.gstNumber : '',
+    clientPhone: client ? client.phone : '',
+    clientEmail: client ? client.email : '',
+    // Items whose From was empty or the previous client's default get the new client's default
+    items: newFrom || oldFrom
+      ? prev.items.map((it) =>
+          !it.fromLocation || (oldFrom && it.fromLocation === oldFrom) ? { ...it, fromLocation: newFrom || '' } : it
+        )
+      : prev.items,
+  };
+};
+
+/** One-time upgrade of saved clients: Abhishek Ispat always loads from Ichchapore. */
+export const migrateClients = (clients) =>
+  clients.map((c) =>
+    c.defaultFrom === undefined && /abhishek/i.test(c.name || '') ? { ...c, defaultFrom: 'Ichchapore' } : c
+  );
 
 export const itemFromTemplate = (template, settings, previousItem) =>
   makeItem(

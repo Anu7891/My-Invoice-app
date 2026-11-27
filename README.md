@@ -10,7 +10,7 @@ A modern React-based invoice editor that allows you to create professional invoi
   - **Clients**: add / edit / delete clients, or save a new client straight from the Bill To form
   - **Quick-add item templates**: one-click buttons like "+ Transport" or "+ Weighing Bill" with their default price
   - **Saved invoices**: save, reopen, duplicate, mark paid/unpaid, search and filter by client
-- **📷 Scan slips from photos (free & offline)**: upload, drag-drop, paste (Ctrl+V) or take a photo of a
+- **📷 Scan slips from photos (free & offline)** — *currently switched off; set `scan: true` in `src/features.js` to enable*: upload, drag-drop, paste (Ctrl+V) or take a photo of a
   weighbridge slip / challan. The app reads the truck no., date and net weight (gross − tare) and adds the items,
   and switches "Bill To" when it recognises the client. Uses open-source Tesseract OCR inside the browser —
   no account, no API key, no internet needed; photos never leave your device.
@@ -60,7 +60,6 @@ A modern React-based invoice editor that allows you to create professional invoi
 1. Run `npm start` on your computer.
 2. Connect the phone to the **same Wi-Fi**, then open `http://<your-computer-IP>:3000` in the phone's browser
    (find the IP with `ipconfig` on Windows, e.g. `http://192.168.1.5:3000`).
-3. Tap the purple 📷 button to photograph a slip.
 
 > Each browser keeps its own data — use Settings → Backup to move clients/invoices between computer and phone.
 

@@ -83,6 +83,7 @@ const SettingsPanel = ({ settings, itemTemplates, onSave, onClose, initialTab = 
       numberPadding: Math.max(0, parseInt(s.numberPadding, 10) || 0),
       dueDays: Math.max(0, parseInt(s.dueDays, 10) || 0),
       defaultTaxRate: Math.max(0, parseFloat(s.defaultTaxRate) || 0),
+      locations: Array.from(new Set((s.locations || []).map((l) => l.trim()).filter(Boolean))),
       priceMin: parseFloat(s.priceMin) || 0,
       priceMax: parseFloat(s.priceMax) || 0,
       priceStep: parseFloat(s.priceStep) || 0,
@@ -161,6 +162,15 @@ const SettingsPanel = ({ settings, itemTemplates, onSave, onClose, initialTab = 
           <div className="form-row">
             {input('Payment due after (days)', s.dueDays, (v) => setTop('dueDays', v), { type: 'number' })}
             {input('Default truck no. for new items', s.defaultTruckNo, (v) => setTop('defaultTruckNo', v))}
+          </div>
+          <div className="form-group">
+            <label>From / To places (one per line)</label>
+            <textarea
+              rows="6"
+              value={(s.locations || []).join('\n')}
+              onChange={(e) => setTop('locations', e.target.value.split('\n'))}
+            />
+            <div className="muted">These appear in the From and To dropdowns. "Custom…" is always there to type any other place.</div>
           </div>
           <div className="form-row">
             {input('Price list from (₹)', s.priceMin, (v) => setTop('priceMin', v), { type: 'number' })}

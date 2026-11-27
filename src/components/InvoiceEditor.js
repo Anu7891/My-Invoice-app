@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import './InvoiceEditor.css';
 import {
   addDaysISO,
+  applyClientToInvoice,
   calcTotals,
   formatCurrency,
   itemAmount,
@@ -20,41 +21,56 @@ const Field = ({ label, children, className = '' }) => (
   </div>
 );
 
-/** Dropdown of common prices + "Custom…" to type any other amount. */
-const PricePicker = ({ value, options, onChange, placeholder }) => {
+/**
+ * Dropdown of common values + "Custom…" to type anything else.
+ * Used for Price (₹300–₹900) and for From / To locations.
+ */
+const SelectOrCustom = ({ value, options, onChange, placeholder, format = (o) => o, numeric = false, emptyLabel = 'Select…' }) => {
   const str = String(value ?? '').trim();
-  const inList = str !== '' && options.some((o) => o === num(str));
+  const match = (o) => (numeric ? o === num(str) : String(o).toLowerCase() === str.toLowerCase());
+  const found = str !== '' ? options.find(match) : undefined;
+  const inList = found !== undefined;
   const [custom, setCustom] = useState(!inList && str !== '');
+  const typedRef = useRef(null);
+  // If the value was changed from outside (not typed here) and is in the list, show it in the dropdown
+  useEffect(() => {
+    if (value !== typedRef.current && inList && custom) setCustom(false);
+    // eslint-disable-next-line
+  }, [value]);
   const showInput = custom || (!inList && str !== '') || options.length === 0;
 
   return (
     <div className="price-picker">
       {options.length > 0 && (
         <select
-          value={showInput ? 'custom' : inList ? String(num(str)) : ''}
+          value={showInput ? '__custom' : inList ? String(found) : ''}
           onChange={(e) => {
-            if (e.target.value === 'custom') {
+            if (e.target.value === '__custom') {
               setCustom(true);
+              if (inList) onChange('');
             } else {
               setCustom(false);
               onChange(e.target.value);
             }
           }}
         >
-          <option value="">Select price…</option>
+          <option value="">{emptyLabel}</option>
           {options.map((o) => (
-            <option key={o} value={String(o)}>₹{o}</option>
+            <option key={o} value={String(o)}>{format(o)}</option>
           ))}
-          <option value="custom">Custom…</option>
+          <option value="__custom">Custom…</option>
         </select>
       )}
       {showInput && (
         <input
           type="text"
-          inputMode="decimal"
+          inputMode={numeric ? 'decimal' : undefined}
           autoFocus={custom && str === ''}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            typedRef.current = e.target.value;
+            onChange(e.target.value);
+          }}
           placeholder={placeholder}
         />
       )}
@@ -93,15 +109,7 @@ const InvoiceEditor = ({
   // ---- client ------------------------------------------------------------
   const selectClient = (id) => {
     const c = clients.find((x) => x.id === id);
-    setInvoice((prev) => ({
-      ...prev,
-      clientId: id,
-      clientName: c ? c.name : '',
-      clientAddress: c ? c.address : '',
-      gstNumber: c ? c.gstNumber : '',
-      clientPhone: c ? c.phone : '',
-      clientEmail: c ? c.email : '',
-    }));
+    setInvoice((prev) => applyClientToInvoice(prev, c, clients));
   };
   const linkedClient = clients.find((c) => c.id === invoice.clientId);
   const clientChanged =
@@ -116,17 +124,24 @@ const InvoiceEditor = ({
   const setItems = (fn) => setInvoice((prev) => ({ ...prev, items: fn(prev.items) }));
   const lastItem = invoice.items[invoice.items.length - 1];
 
-  const addFromTemplate = (t) => setItems((items) => [...items, itemFromTemplate(t, settings, items[items.length - 1])]);
+  // The current client's default From location (e.g. Abhishek Ispat → Ichchapore)
+  const clientFrom = (clients.find((c) => c.id === invoice.clientId) || {}).defaultFrom || '';
+  const withClientFrom = (item) => (item.fromLocation ? item : { ...item, fromLocation: clientFrom });
+
+  const addFromTemplate = (t) =>
+    setItems((items) => [...items, withClientFrom(itemFromTemplate(t, settings, items[items.length - 1]))]);
   const addBlank = () =>
     setItems((items) => {
       const prev = items[items.length - 1];
       return [
         ...items,
-        makeItem(
-          prev
-            ? { deliveredTo: prev.deliveredTo, deliveryDate: prev.deliveryDate, fromLocation: prev.fromLocation, toLocation: prev.toLocation, truckNo: prev.truckNo }
-            : {},
-          settings
+        withClientFrom(
+          makeItem(
+            prev
+              ? { deliveredTo: prev.deliveredTo, deliveryDate: prev.deliveryDate, fromLocation: prev.fromLocation, toLocation: prev.toLocation, truckNo: prev.truckNo }
+              : {},
+            settings
+          )
         ),
       ];
     });
@@ -194,6 +209,7 @@ const InvoiceEditor = ({
 
   const totals = calcTotals(invoice);
   const prices = priceOptions(settings);
+  const locations = Array.isArray(settings.locations) ? settings.locations : [];
 
   const allCollapsed = invoice.items.length > 0 && invoice.items.every((it) => collapsed[it.id]);
   const toggleAll = () =>
@@ -288,7 +304,7 @@ const InvoiceEditor = ({
           {invoice.items.length === 0 && (
             <div className="empty-items">
               <div className="big">🧾</div>
-              <div>No items yet. Add one below, or scan a photo of a slip and let the app fill it in.</div>
+              <div>No items yet. Add one with the buttons below{onOpenScan ? ', or scan a photo of a slip' : ''}.</div>
             </div>
           )}
           {invoice.items.map((item, index) => {
@@ -370,10 +386,22 @@ const InvoiceEditor = ({
                       </div>
                       <div className="form-row">
                         <Field label="From Location:">
-                          <input type="text" list="dl-places" value={item.fromLocation} onChange={(e) => updateItem(item.id, 'fromLocation', e.target.value)} />
+                          <SelectOrCustom
+                            value={item.fromLocation}
+                            options={locations}
+                            emptyLabel="Select place…"
+                            placeholder="Type place"
+                            onChange={(v) => updateItem(item.id, 'fromLocation', v)}
+                          />
                         </Field>
                         <Field label="To Location:">
-                          <input type="text" list="dl-places" value={item.toLocation} onChange={(e) => updateItem(item.id, 'toLocation', e.target.value)} />
+                          <SelectOrCustom
+                            value={item.toLocation}
+                            options={locations}
+                            emptyLabel="Select place…"
+                            placeholder="Type place"
+                            onChange={(v) => updateItem(item.id, 'toLocation', v)}
+                          />
                         </Field>
                       </div>
                       <div className="form-row">
@@ -421,9 +449,12 @@ const InvoiceEditor = ({
                         />
                       </Field>
                       <Field label={item.isFixedPrice ? 'Fixed Price (₹):' : 'Price (₹):'}>
-                        <PricePicker
+                        <SelectOrCustom
+                          numeric
                           value={item.price}
                           options={prices}
+                          format={(o) => `₹${o}`}
+                          emptyLabel="Select price…"
                           onChange={(v) => updateItem(item.id, 'price', v)}
                           placeholder={item.isFixedPrice ? 'Enter fixed amount' : 'Type price per unit'}
                         />

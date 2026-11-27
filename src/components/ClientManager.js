@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import Modal from './Modal';
 import { newId } from '../utils/invoice';
 
-const EMPTY = { name: '', address: '', gstNumber: '', phone: '', email: '' };
+const EMPTY = { name: '', address: '', gstNumber: '', phone: '', email: '', defaultFrom: '' };
 
-const ClientManager = ({ clients, setClients, onUseClient, onClose, initialDraft }) => {
+const ClientManager = ({ clients, setClients, onUseClient, onClose, initialDraft, locations = [] }) => {
   // editing: null = list view, {} = form (id present = edit, absent = new)
   const [editing, setEditing] = useState(initialDraft || null);
   const [search, setSearch] = useState('');
@@ -59,6 +59,17 @@ const ClientManager = ({ clients, setClients, onUseClient, onClose, initialDraft
           {field('phone', 'Phone')}
           {field('email', 'Email')}
         </div>
+        <div className="form-group">
+          <label>Default "From" location for this client's trips</label>
+          <input
+            type="text"
+            list="dl-client-from"
+            value={editing.defaultFrom || ''}
+            onChange={(e) => setEditing({ ...editing, defaultFrom: e.target.value })}
+            placeholder="e.g. Ichchapore (leave empty if it changes every time)"
+          />
+          <datalist id="dl-client-from">{locations.map((l) => <option key={l} value={l} />)}</datalist>
+        </div>
       </Modal>
     );
   }
@@ -81,7 +92,9 @@ const ClientManager = ({ clients, setClients, onUseClient, onClose, initialDraft
           <li key={c.id} className="list-row">
             <div className="grow">
               <strong>{c.name}</strong>
-              <div className="sub">{[c.gstNumber, c.address.replace(/\n/g, ', ')].filter(Boolean).join(' · ')}</div>
+              <div className="sub">
+                {[c.defaultFrom ? `From: ${c.defaultFrom}` : '', c.gstNumber, c.address.replace(/\n/g, ', ')].filter(Boolean).join(' · ')}
+              </div>
             </div>
             <div className="actions">
               {onUseClient && (
