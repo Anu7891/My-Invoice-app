@@ -410,3 +410,21 @@
     font-size: 12px;
   }
 }
+
+/* ---------- Dynamic features ---------- */
+.totals-table .tax-row td {
+  font-weight: normal;
+}
+
+.amount-words {
+  margin-top: 10px;
+  font-size: 13px;
+  font-style: italic;
+  text-align: left;
+}
+
+.invoice-notes {
+  margin-top: 20px;
+  font-size: 14px;
+  white-space: pre-line;
+}

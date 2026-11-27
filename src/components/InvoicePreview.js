@@ -1,37 +1,48 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
 import './InvoicePreview.css';
+import { amountInWords, calcTotals, formatCurrency, formatDate, itemAmount, num } from '../utils/invoice';
 
-const InvoicePreview = ({ invoiceData, formatDate, formatCurrency }) => {
-  const subtotal = invoiceData.items.reduce((sum, item) => {
-    const price = parseFloat(item.price) || 0;
-    if (item.isFixedPrice) {
-      return sum + price;
-    } else {
-      const quantity = parseFloat(item.quantity) || 0;
-      return sum + (quantity * price);
-    }
-  }, 0);
+const Lines = ({ text }) =>
+  String(text || '')
+    .split('\n')
+    .map((line, i) => (
+      <React.Fragment key={i}>
+        {line}
+        <br />
+      </React.Fragment>
+    ));
+
+// The element with ref is what gets exported / printed.
+const InvoicePreview = forwardRef(({ invoiceData, settings }, ref) => {
+  const { subtotal, taxRate, tax, total } = calcTotals(invoiceData);
+  const signatureSrc = settings.signatureImage || `${process.env.PUBLIC_URL || ''}/images/sign.png`;
 
   return (
     <div className="preview-panel">
       <h2>Invoice Preview</h2>
-      <div className="invoice-preview">
+      <div className="invoice-preview" ref={ref}>
         <div className="header-container">
-          <div className="left-header">
-            {invoiceData.companyName || 'COMPANY NAME'}
-          </div>
+          <div className="left-header">{invoiceData.companyName || 'COMPANY NAME'}</div>
           <div className="right-header">
             <div className="invoice-title">Invoice</div>
             <div className="company-details">
-              <strong>{invoiceData.companyName || 'COMPANY NAME'}</strong><br />
-              {invoiceData.companyAddress.split('\n').map((line, index) => (
-                <React.Fragment key={index}>
-                  {line}<br />
-                </React.Fragment>
-              ))}<br />
-              PAN NO: {invoiceData.panNumber || 'PAN'}<br />
-              {invoiceData.phoneNumber || 'Phone'}<br />
-              {invoiceData.email || 'Email'}
+              <strong>{invoiceData.companyName || 'COMPANY NAME'}</strong>
+              <br />
+              <Lines text={invoiceData.companyAddress} />
+              <br />
+              {invoiceData.panNumber && (
+                <>
+                  PAN NO: {invoiceData.panNumber}
+                  <br />
+                </>
+              )}
+              {invoiceData.phoneNumber && (
+                <>
+                  {invoiceData.phoneNumber}
+                  <br />
+                </>
+              )}
+              {invoiceData.email}
             </div>
           </div>
         </div>
@@ -40,30 +51,25 @@ const InvoicePreview = ({ invoiceData, formatDate, formatCurrency }) => {
           <div className="bill-to">
             <h3>BILL TO</h3>
             <div>
-              <strong>{invoiceData.clientName || 'Client Name'}</strong><br />
-              {invoiceData.clientAddress.split('\n').map((line, index) => (
-                <React.Fragment key={index}>
-                  {line}<br />
-                </React.Fragment>
-              ))}
+              <strong>{invoiceData.clientName || 'Client Name'}</strong>
+              <br />
+              <Lines text={invoiceData.clientAddress} />
               {invoiceData.gstNumber && invoiceData.gstNumber.trim() !== '' && (
                 <>
-                  Tax Reg No. : {invoiceData.gstNumber}<br />
+                  Tax Reg No. : {invoiceData.gstNumber}
+                  <br />
                 </>
               )}
               {invoiceData.clientEmail && invoiceData.clientEmail.trim() !== '' && (
                 <>
-                  {invoiceData.clientEmail}<br />
+                  {invoiceData.clientEmail}
+                  <br />
                 </>
               )}
-              {invoiceData.clientPhone && invoiceData.clientPhone.trim() !== '' && (
-                <>
-                  {invoiceData.clientPhone}
-                </>
-              )}
+              {invoiceData.clientPhone && invoiceData.clientPhone.trim() !== '' && <>{invoiceData.clientPhone}</>}
             </div>
           </div>
-          
+
           <div className="invoice-details">
             <div><strong>Invoice #</strong> {invoiceData.invoiceNumber}</div>
             <div><strong>Date</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {formatDate(invoiceData.invoiceDate)}</div>
@@ -89,19 +95,32 @@ const InvoicePreview = ({ invoiceData, formatDate, formatCurrency }) => {
                       <div className="item-title">{item.title}</div>
                       {item.deliveredTo && <div><strong>Delivered To:</strong> {item.deliveredTo}</div>}
                       {item.deliveryDate && <div><strong>Date:</strong> {formatDate(item.deliveryDate)}</div>}
-                      {item.fromLocation && item.toLocation && <div><strong>From:</strong> {item.fromLocation} to {item.toLocation}</div>}
+                      {item.fromLocation && item.toLocation && (
+                        <div><strong>From:</strong> {item.fromLocation} to {item.toLocation}</div>
+                      )}
+                      {item.fromLocation && !item.toLocation && <div><strong>From:</strong> {item.fromLocation}</div>}
+                      {!item.fromLocation && item.toLocation && <div><strong>To:</strong> {item.toLocation}</div>}
                       {item.truckNo && <div><strong>Truck no:</strong> {item.truckNo}</div>}
                       {item.weight && <div><strong>Weight:</strong> {item.weight}</div>}
+                      {(item.extraDetails || [])
+                        .filter((d) => d.label || d.value)
+                        .map((d) => (
+                          <div key={d.id}>
+                            {d.label && <strong>{d.label}:</strong>} {d.value}
+                          </div>
+                        ))}
                     </div>
                   </td>
                   <td className="quantity-col">{item.quantity}</td>
-                  <td className="price-col">{formatCurrency(parseFloat(item.price) || 0)}</td>
-                  <td className="amount-col">{formatCurrency(item.isFixedPrice ? (parseFloat(item.price) || 0) : ((parseFloat(item.quantity) || 0) * (parseFloat(item.price) || 0)))}</td>
+                  <td className="price-col">{formatCurrency(num(item.price))}</td>
+                  <td className="amount-col">{formatCurrency(itemAmount(item))}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        {invoiceData.notes && invoiceData.notes.trim() && <div className="invoice-notes">{invoiceData.notes}</div>}
 
         <div className="bottom-section">
           <div className="payment-instructions">
@@ -112,44 +131,51 @@ const InvoicePreview = ({ invoiceData, formatDate, formatCurrency }) => {
               <div>IFSC CODE: {invoiceData.ifscCode || 'IFSC Code'}</div>
             </div>
           </div>
-          
+
           <div className="totals-section">
             <table className="totals-table">
-              <tr>
-                <td>Subtotal</td>
-                <td>{formatCurrency(subtotal)}</td>
-              </tr>
-              <tr>
-                <td>Total</td>
-                <td>{formatCurrency(subtotal)}</td>
-              </tr>
+              <tbody>
+                <tr>
+                  <td>Subtotal</td>
+                  <td>{formatCurrency(subtotal)}</td>
+                </tr>
+                {taxRate > 0 && (
+                  <tr className="tax-row">
+                    <td>{settings.taxLabel || 'Tax'} ({taxRate}%)</td>
+                    <td>{formatCurrency(tax)}</td>
+                  </tr>
+                )}
+                <tr>
+                  <td>Total</td>
+                  <td>{formatCurrency(total)}</td>
+                </tr>
+              </tbody>
             </table>
             <div className="amount-due">
               <div className="amount-due-label">Amount Due</div>
-              <div className="amount-due-value">{formatCurrency(subtotal)}</div>
+              <div className="amount-due-value">{formatCurrency(total)}</div>
             </div>
+            {settings.showAmountInWords && <div className="amount-words">{amountInWords(total)}</div>}
           </div>
         </div>
 
         <div className="signature-section">
           <div className="agreement-text">
-            By signing this document, the customer agrees to the services and conditions described in this document.
+            {settings.agreementText}
             <div className="signature-name">{invoiceData.signatureName || 'SIGNATURE NAME'}</div>
           </div>
           <div className="signature-area">
             <div className="signature-line">
               <div className="signature-space">
-                <img src="/images/sign.png" alt="Signature" title="signature" className="actual-signature" />
+                <img src={signatureSrc} alt="Signature" title="signature" className="actual-signature" />
               </div>
-              <div>
-                {formatDate(invoiceData.signatureDate)}
-              </div>
+              <div>{formatDate(invoiceData.signatureDate)}</div>
             </div>
           </div>
         </div>
       </div>
     </div>
   );
-};
+});
 
 export default InvoicePreview;

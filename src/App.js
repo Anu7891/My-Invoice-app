@@ -1,413 +1,318 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import InvoiceEditor from './components/InvoiceEditor';
 import InvoicePreview from './components/InvoicePreview';
+import ClientManager from './components/ClientManager';
+import SettingsPanel from './components/SettingsPanel';
+import InvoiceHistory from './components/InvoiceHistory';
+import usePersistentState from './hooks/usePersistentState';
+import { STORAGE_KEYS } from './utils/storage';
+import { downloadInvoiceHTML, printInvoice } from './utils/exportInvoice';
+import {
+  DEFAULT_CLIENTS,
+  DEFAULT_ITEM_TEMPLATES,
+  DEFAULT_SETTINGS,
+  createInvoice,
+  formatInvoiceNumber,
+  itemFromTemplate,
+  newId,
+  parseInvoiceSeq,
+  todayISO,
+  addDaysISO,
+} from './utils/invoice';
+
+// Fields compared to decide whether the open invoice has unsaved changes.
+const stripMeta = ({ savedAt, status, ...rest }) => rest;
+
+/** Most-used values first, for autocomplete. */
+const topValues = (values) => {
+  const counts = new Map();
+  values.forEach((v) => {
+    const s = String(v || '').trim();
+    if (s) counts.set(s, (counts.get(s) || 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([v]) => v)
+    .slice(0, 50);
+};
 
 function App() {
-  // Define available clients
-  const clients = {
-    'saturn': {
-      name: 'Saturn Industries',
-      address: 'Plot No. 74, Hojiwala Ind. Estate, Opp.\nGate No.2, National Highway 53, Vanz, Choryasi\nSurat Gujarat\nIN',
-      gstNumber: 'GSTIN: 24ABXFM0127A1ZL',
-      phone: '9879954421, 9879964421',
-      email: 'saturn@hareshpipes.in'
-    },
-    'abhishek': {
-      name: 'Abhishek Inspat Pvt. Ltd.',
-      address: 'Plot No. A-25/1, A-24/2\nGIDC, Ichchapore\nSurat, Gujarat\nIN',
-      gstNumber: 'GSTIN: 24AABCA9858J1ZC',
-      phone: '',
-      email: ''
-    },
-    'giriraj':{
-      name: 'Shree Giriraj Metals & Minerals',
-      address: 'Plot No. C 5/6, Road No.8, Gate No.1, Hojiwala Industrial Estate,Sachin-Palsana Highway, Surat - 394230',
-      gstNumber: 'GSTIN: 24GLUPS8523M1Z1',
-      phone: '',
-      email: 'sgmm.surat@gmail.com'
+  // ---- persisted data ----------------------------------------------------
+  const [rawSettings, setSettings] = usePersistentState(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
+  // Merge with defaults so new settings added in future versions always exist.
+  const settings = useMemo(
+    () => ({
+      ...DEFAULT_SETTINGS,
+      ...rawSettings,
+      business: { ...DEFAULT_SETTINGS.business, ...(rawSettings.business || {}) },
+      bank: { ...DEFAULT_SETTINGS.bank, ...(rawSettings.bank || {}) },
+    }),
+    [rawSettings]
+  );
+  const [clients, setClients] = usePersistentState(STORAGE_KEYS.clients, DEFAULT_CLIENTS);
+  const [itemTemplates, setItemTemplates] = usePersistentState(STORAGE_KEYS.itemTemplates, DEFAULT_ITEM_TEMPLATES);
+  const [invoices, setInvoices] = usePersistentState(STORAGE_KEYS.invoices, []);
+  const [invoice, setInvoice] = usePersistentState(STORAGE_KEYS.draft, () => {
+    // First run: a fresh invoice with the first client and the quick-add items.
+    const inv = createInvoice(settings, clients[0]);
+    inv.items = itemTemplates.map((t) => itemFromTemplate(t, settings));
+    return inv;
+  });
+
+  const [modal, setModal] = useState(null); // 'clients' | 'settings' | 'history'
+  const [settingsTab, setSettingsTab] = useState('business');
+  const [toast, setToast] = useState('');
+  const previewRef = useRef(null);
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    window.clearTimeout(showToast.t);
+    showToast.t = window.setTimeout(() => setToast(''), 2500);
+  }, []);
+
+  // ---- derived -----------------------------------------------------------
+  const savedVersion = invoice.id ? invoices.find((i) => i.id === invoice.id) : null;
+  const isDirty = !savedVersion || JSON.stringify(stripMeta(savedVersion)) !== JSON.stringify(stripMeta(invoice));
+  const hasContent = invoice.items.length > 0 || invoice.clientName.trim();
+
+  const suggestions = useMemo(() => {
+    const allItems = [...invoices.flatMap((i) => i.items), ...invoice.items];
+    return {
+      titles: topValues([...itemTemplates.map((t) => t.title), ...allItems.map((i) => i.title)]),
+      places: topValues(allItems.flatMap((i) => [i.fromLocation, i.toLocation])),
+      deliveredTo: topValues(allItems.map((i) => i.deliveredTo)),
+      trucks: topValues([settings.defaultTruckNo, ...allItems.map((i) => i.truckNo)]),
+      extraLabels: topValues(allItems.flatMap((i) => (i.extraDetails || []).map((d) => d.label))),
+    };
+  }, [invoices, invoice.items, itemTemplates, settings.defaultTruckNo]);
+
+  // ---- invoice actions ---------------------------------------------------
+  const confirmDiscard = () =>
+    !isDirty || !hasContent || window.confirm('This invoice has unsaved changes. Continue without saving?');
+
+  const newInvoice = () => {
+    if (!confirmDiscard()) return;
+    const client = clients.find((c) => c.id === invoice.clientId) || clients[0];
+    setInvoice(createInvoice(settings, client));
+    showToast(`New invoice ${formatInvoiceNumber(settings)}`);
+  };
+
+  const saveInvoice = useCallback(() => {
+    if (!invoice.invoiceNumber.trim()) {
+      alert('Please enter an invoice number before saving.');
+      return;
+    }
+    const clash = invoices.find(
+      (i) => i.id !== invoice.id && i.invoiceNumber.trim().toLowerCase() === invoice.invoiceNumber.trim().toLowerCase()
+    );
+    if (clash && !window.confirm(`Invoice number ${invoice.invoiceNumber} is already used by another saved invoice. Save anyway?`)) {
+      return;
+    }
+
+    const isNew = !invoice.id;
+    const saved = {
+      ...invoice,
+      id: invoice.id || newId(),
+      status: savedVersion ? savedVersion.status : 'unpaid',
+      savedAt: new Date().toISOString(),
+    };
+    setInvoices((list) => (isNew ? [...list, saved] : list.map((i) => (i.id === saved.id ? saved : i))));
+    setInvoice(saved);
+
+    // Auto-increment the invoice counter
+    const seq = parseInvoiceSeq(saved.invoiceNumber);
+    if (seq !== null && seq >= settings.nextInvoiceNumber) {
+      setSettings((s) => ({ ...s, nextInvoiceNumber: seq + 1 }));
+    }
+    showToast(isNew ? `Saved ${saved.invoiceNumber}` : `Updated ${saved.invoiceNumber}`);
+  }, [invoice, invoices, savedVersion, settings.nextInvoiceNumber, setInvoices, setInvoice, setSettings, showToast]);
+
+  const openInvoice = (inv) => {
+    if (inv.id !== invoice.id && !confirmDiscard()) return;
+    setInvoice({ ...inv });
+  };
+
+  const duplicateInvoice = (inv) => {
+    if (!confirmDiscard()) return;
+    const date = todayISO();
+    setInvoice({
+      ...inv,
+      id: null,
+      status: 'draft',
+      savedAt: undefined,
+      invoiceNumber: formatInvoiceNumber(settings),
+      invoiceDate: date,
+      dueDate: addDaysISO(date, settings.dueDays),
+      signatureDate: date,
+      items: inv.items.map((it) => ({ ...it, id: newId() })),
+    });
+    showToast('Copied — edit and Save as a new invoice');
+  };
+
+  const deleteInvoice = (inv) => {
+    setInvoices((list) => list.filter((i) => i.id !== inv.id));
+    if (inv.id === invoice.id) setInvoice((cur) => ({ ...cur, id: null, status: 'draft' }));
+  };
+
+  const togglePaid = (inv) => {
+    const status = inv.status === 'paid' ? 'unpaid' : 'paid';
+    setInvoices((list) => list.map((i) => (i.id === inv.id ? { ...i, status } : i)));
+    if (inv.id === invoice.id) setInvoice((cur) => ({ ...cur, status }));
+  };
+
+  // ---- clients / templates / settings ------------------------------------
+  const applyClient = (c) =>
+    setInvoice((prev) => ({
+      ...prev,
+      clientId: c.id,
+      clientName: c.name,
+      clientAddress: c.address,
+      gstNumber: c.gstNumber,
+      clientPhone: c.phone,
+      clientEmail: c.email,
+    }));
+
+  const saveClientFromInvoice = (updateExisting) => {
+    const data = {
+      name: invoice.clientName.trim(),
+      address: invoice.clientAddress,
+      gstNumber: invoice.gstNumber,
+      phone: invoice.clientPhone,
+      email: invoice.clientEmail,
+    };
+    if (updateExisting && invoice.clientId) {
+      setClients((list) => list.map((c) => (c.id === invoice.clientId ? { ...c, ...data } : c)));
+      showToast(`Updated client ${data.name}`);
+    } else {
+      const id = newId();
+      setClients((list) => [...list, { id, ...data }]);
+      setInvoice((prev) => ({ ...prev, clientId: id }));
+      showToast(`Added ${data.name} to clients`);
     }
   };
 
-  const [selectedClient, setSelectedClient] = useState('saturn');
-  const [invoiceData, setInvoiceData] = useState({
-    companyName: 'KAILASH SINGH',
-    companyAddress: 'Plot No: 88\nNear Bapasitaram Mill\nSachin',
-    panNumber: 'AYUPS4946H',
-    phoneNumber: '8487854692',
-    email: 'singhanubhav8783@gmail.com',
-    invoiceNumber: '',
-    invoiceDate: '',
-    dueDate: '',
-    clientName: clients.saturn.name,
-    clientAddress: clients.saturn.address,
-    gstNumber: clients.saturn.gstNumber,
-    clientPhone: clients.saturn.phone,
-    clientEmail: clients.saturn.email,
-    bankName: 'INDIAN BANK(SACHIN BRANCH)',
-    accountNumber: '524314207',
-    ifscCode: 'IDIB000S095',
-    signatureName: 'KAILASH SINGH',
-    signatureDate: '',
-    items: [
+  const saveTemplateFromItem = (item) => {
+    setItemTemplates((list) => [
+      ...list,
       {
-        id: 1,
-        title: 'Transport',
-        deliveredTo: 'Saturn Godown',
-        deliveryDate: '2025-09-27',
-        fromLocation: 'Vitco (Sachin)',
-        toLocation: 'Hojiwala',
-        truckNo: 'GJ21T5475',
-        weight: '29065kg',
-        quantity: 29.065,
-        price: 150.00,
-        isFixedPrice: false
+        id: newId(),
+        title: item.title.trim(),
+        price: item.price,
+        quantity: item.qtyFromWeight ? '' : item.quantity,
+        isFixedPrice: !!item.isFixedPrice,
+        qtyFromWeight: !!item.qtyFromWeight,
       },
-      {
-        id: 2,
-        title: 'Weighing Bill',
-        deliveredTo: 'Saturn Godown',
-        deliveryDate: '2025-09-27',
-        fromLocation: 'Vitco (Sachin)',
-        toLocation: 'Hojiwala',
-        truckNo: 'GJ21T5475',
-        weight: '',
-        quantity: 1,
-        price: 130.00,
-        isFixedPrice: false
-      }
-    ]
-  });
+    ]);
+    showToast(`"${item.title.trim()}" added to quick-add buttons`);
+  };
 
-  // Set default dates on component mount
+  const saveSettings = (newSettings, newTemplates) => {
+    setSettings(newSettings);
+    setItemTemplates(newTemplates);
+    // An invoice that hasn't been saved yet picks up the new details straight away.
+    if (!invoice.id) {
+      setInvoice((prev) => ({
+        ...prev,
+        ...newSettings.business,
+        ...newSettings.bank,
+        signatureName: newSettings.signatureName,
+        invoiceNumber:
+          prev.invoiceNumber === formatInvoiceNumber(settings) ? formatInvoiceNumber(newSettings) : prev.invoiceNumber,
+      }));
+    }
+    showToast('Settings saved');
+  };
+
+  const openSettings = (tab = 'business') => {
+    setSettingsTab(tab);
+    setModal('settings');
+  };
+
+  // ---- export ------------------------------------------------------------
+  const title = `Invoice ${invoice.invoiceNumber} - ${invoice.clientName || invoice.companyName}`;
+  const fileName = `invoice-${(invoice.invoiceNumber || 'draft').replace(/[\\/:*?"<>|\s]+/g, '-')}.html`;
+
+  // Ctrl/Cmd + S saves
   useEffect(() => {
-    const today = new Date();
-    const dueDate = new Date(today);
-    dueDate.setDate(today.getDate() + 7);
-    
-    setInvoiceData(prev => ({
-      ...prev,
-      invoiceDate: today.toISOString().split('T')[0],
-      dueDate: dueDate.toISOString().split('T')[0],
-      signatureDate: today.toISOString().split('T')[0]
-    }));
-  }, []);
-
-  const updateInvoiceData = (field, value) => {
-    setInvoiceData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
-
-  const handleClientChange = (clientKey) => {
-    setSelectedClient(clientKey);
-    const client = clients[clientKey];
-    setInvoiceData(prev => ({
-      ...prev,
-      clientName: client.name,
-      clientAddress: client.address,
-      gstNumber: client.gstNumber,
-      clientPhone: client.phone,
-      clientEmail: client.email
-    }));
-  };
-
-  const addItem = () => {
-    const newItem = {
-      id: Date.now(),
-      title: '',
-      deliveredTo: '',
-      deliveryDate: '',
-      fromLocation: '',
-      toLocation: '',
-      truckNo: 'GJ21T5475',
-      weight: '',
-      quantity: 0,
-      price: 0,
-      isFixedPrice: false
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveInvoice();
+      }
     };
-    setInvoiceData(prev => ({
-      ...prev,
-      items: [...prev.items, newItem]
-    }));
-  };
-
-  const updateItem = (itemId, field, value) => {
-    setInvoiceData(prev => ({
-      ...prev,
-      items: prev.items.map(item =>
-        item.id === itemId ? { ...item, [field]: value } : item
-      )
-    }));
-  };
-
-  const removeItem = (itemId) => {
-    setInvoiceData(prev => ({
-      ...prev,
-      items: prev.items.filter(item => item.id !== itemId)
-    }));
-  };
-
-  const moveItemUp = (itemId) => {
-    setInvoiceData(prev => {
-      const items = [...prev.items];
-      const currentIndex = items.findIndex(item => item.id === itemId);
-      
-      if (currentIndex > 0) {
-        // Swap with the item above
-        [items[currentIndex], items[currentIndex - 1]] = [items[currentIndex - 1], items[currentIndex]];
-      }
-      
-      return {
-        ...prev,
-        items: items
-      };
-    });
-  };
-
-  const moveItemDown = (itemId) => {
-    setInvoiceData(prev => {
-      const items = [...prev.items];
-      const currentIndex = items.findIndex(item => item.id === itemId);
-      
-      if (currentIndex < items.length - 1) {
-        // Swap with the item below
-        [items[currentIndex], items[currentIndex + 1]] = [items[currentIndex + 1], items[currentIndex]];
-      }
-      
-      return {
-        ...prev,
-        items: items
-      };
-    });
-  };
-
-  const exportToHTML = () => {
-    const element = document.createElement('a');
-    const file = new Blob([generateHTML()], { type: 'text/html' });
-    element.href = URL.createObjectURL(file);
-    element.download = `invoice-${invoiceData.invoiceNumber || 'INV-001'}.html`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
-
-  const printInvoice = () => {
-    const printWindow = window.open('', '_blank');
-    printWindow.document.write(generateHTML());
-    printWindow.document.close();
-    printWindow.print();
-  };
-
-  const generateHTML = () => {
-    const subtotal = invoiceData.items.reduce((sum, item) => {
-      const price = parseFloat(item.price) || 0;
-      if (item.isFixedPrice) {
-        return sum + price;
-      } else {
-        const quantity = parseFloat(item.quantity) || 0;
-        return sum + (quantity * price);
-      }
-    }, 0);
-    
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Invoice - ${invoiceData.companyName}</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 40px; color: #000; line-height: 1.4; }
-    .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; }
-    .left-header { font-size: 24px; font-weight: bold; }
-    .right-header { text-align: right; }
-    .invoice-title { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
-    .company-details { font-size: 14px; line-height: 1.3; }
-    .bill-to-container { display: flex; justify-content: space-between; margin-bottom: 30px; }
-    .bill-to { flex: 1; background-color: #f5f5f5; padding: 15px; margin-right: 0px; }
-    .bill-to h3 { margin: 0 0 10px 0; font-size: 16px; font-weight: bold; }
-    .invoice-details { flex: 0 0 200px; text-align: right; background-color: #f5f5f5; padding: 15px; }
-    .invoice-details div { margin-bottom: 8px; }
-    .details-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    .details-table th { background-color: #f5f5f5; border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: bold; }
-    .details-table td { border: 1px solid #ddd; padding: 12px; vertical-align: top; }
-    .details-table .quantity-col, .details-table .price-col, .details-table .amount-col { text-align: right; width: 100px; }
-    .item-details { line-height: 1.3; }
-    .item-title { font-weight: bold; margin-bottom: 5px; }
-    .bottom-section { display: flex; justify-content: space-between; margin-top: 30px; }
-    .payment-instructions { flex: 1; margin-right: 20px; }
-    .payment-instructions h3 { margin: 0 0 15px 0; font-size: 16px; font-weight: bold; }
-    .bank-details div { margin-bottom: 5px; color: #666; }
-    .totals-section { flex: 0 0 300px; text-align: right; }
-    .totals-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-    .totals-table td { padding: 8px 0; border-bottom: 1px solid #ddd; }
-    .totals-table td:first-child { text-align: left; padding-right: 40px; }
-    .totals-table td:last-child { text-align: right; font-weight: bold; }
-    .amount-due { background-color: #f5f5f5; padding: 15px; margin-top: 10px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
-    .amount-due-label { font-weight: bold; }
-    .amount-due-value { font-size: 20px; font-weight: bold; color: #000; }
-    .signature-section { margin-top: 40px; padding-top: 20px; border-top: 2px solid #000; }
-    .agreement-text { font-size: 14px; color: #333; text-align: left; }
-    .signature-area { display: flex; justify-content: flex-start; }
-    .signature-line { width: 300px; text-align: left; }
-    .signature-space { border-bottom: 2px solid #000; margin-bottom: 10px; position: relative; display: flex; align-items: flex-end; padding-bottom: 5px; min-height: 40px; }
-    .actual-signature { max-height: 100px; max-width: 300px; height: auto; width: auto; object-fit: contain; }
-    .signature-name { font-weight: bold; font-size: 16px; color: #000; margin-top: 10px; }
-  </style>
-</head>
-<body>
-  <div class="header-container">
-    <div class="left-header">${invoiceData.companyName}</div>
-    <div class="right-header">
-      <div class="invoice-title">Invoice</div>
-      <div class="company-details">
-        <strong>${invoiceData.companyName}</strong><br>
-        ${invoiceData.companyAddress.replace(/\n/g, '<br>')}<br><br>
-        PAN NO: ${invoiceData.panNumber}<br>
-        ${invoiceData.phoneNumber}<br>
-        ${invoiceData.email}
-      </div>
-    </div>
-  </div>
-
-  <div class="bill-to-container">
-    <div class="bill-to">
-      <h3>BILL TO</h3>
-      <div>
-        <strong>${invoiceData.clientName}</strong><br>
-        ${invoiceData.clientAddress.replace(/\n/g, '<br>')}<br>
-        ${invoiceData.gstNumber && invoiceData.gstNumber.trim() !== '' ? 'Tax Reg No. : ' + invoiceData.gstNumber + '<br>' : ''}
-        ${invoiceData.clientEmail && invoiceData.clientEmail.trim() !== '' ? invoiceData.clientEmail + '<br>' : ''}
-        ${invoiceData.clientPhone && invoiceData.clientPhone.trim() !== '' ? invoiceData.clientPhone : ''}
-      </div>
-    </div>
-    
-    <div class="invoice-details">
-      <div><strong>Invoice #</strong> ${invoiceData.invoiceNumber}</div>
-      <div><strong>Date</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${formatDate(invoiceData.invoiceDate)}</div>
-      <div><strong>Due date</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${formatDate(invoiceData.dueDate)}</div>
-    </div>
-  </div>
-
-  <table class="details-table">
-    <thead>
-      <tr>
-        <th>Item</th>
-        <th class="quantity-col">Quantity</th>
-        <th class="price-col">Price</th>
-        <th class="amount-col">Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${invoiceData.items.map(item => `
-        <tr>
-          <td>
-            <div class="item-details">
-              <div class="item-title">${item.title}</div>
-              ${item.deliveredTo ? `<div><strong>Delivered To:</strong> ${item.deliveredTo}</div>` : ''}
-              ${item.deliveryDate ? `<div><strong>Date:</strong> ${formatDate(item.deliveryDate)}</div>` : ''}
-              ${item.fromLocation && item.toLocation ? `<div><strong>From:</strong> ${item.fromLocation} to ${item.toLocation}</div>` : ''}
-              ${item.truckNo ? `<div><strong>Truck no:</strong> ${item.truckNo}</div>` : ''}
-              ${item.weight ? `<div><strong>Weight:</strong> ${item.weight}</div>` : ''}
-            </div>
-          </td>
-          <td class="quantity-col">${item.quantity}</td>
-          <td class="price-col">${formatCurrency(parseFloat(item.price) || 0)}</td>
-          <td class="amount-col">${formatCurrency(item.isFixedPrice ? (parseFloat(item.price) || 0) : ((parseFloat(item.quantity) || 0) * (parseFloat(item.price) || 0)))}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-
-  <div class="bottom-section">
-    <div class="payment-instructions">
-      <h3>Payment Instructions</h3>
-      <div class="bank-details">
-        <div>${invoiceData.bankName}</div>
-        <div>A/c no: ${invoiceData.accountNumber}</div>
-        <div>IFSC CODE: ${invoiceData.ifscCode}</div>
-      </div>
-    </div>
-    
-    <div class="totals-section">
-      <table class="totals-table">
-        <tr>
-          <td>Subtotal</td>
-          <td>${formatCurrency(subtotal)}</td>
-        </tr>
-        <tr>
-          <td>Total</td>
-          <td>${formatCurrency(subtotal)}</td>
-        </tr>
-      </table>
-      <div class="amount-due">
-        <div class="amount-due-label">Amount Due</div>
-        <div class="amount-due-value">${formatCurrency(subtotal)}</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="signature-section">
-    <div class="agreement-text">
-      By signing this document, the customer agrees to the services and conditions described in this document.
-      <div class="signature-name">${invoiceData.signatureName}</div>
-    </div>
-    <div class="signature-area">
-      <div class="signature-line">
-        <div class="signature-space">
-          <img src="images/sign.png" alt="Signature" title="signature" class="actual-signature">
-        </div>
-        <div>${formatDate(invoiceData.signatureDate)}</div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
-  };
-
-  const formatCurrency = (amount) => {
-    return '₹' + amount.toLocaleString('en-IN', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    });
-  };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saveInvoice]);
 
   return (
     <div className="App">
-      <div className="export-buttons">
-        <button className="btn btn-success" onClick={exportToHTML}>Export HTML</button>
-        <button className="btn" onClick={printInvoice}>Print Invoice</button>
+      <div className="toolbar">
+        <div className="toolbar-status">
+          <strong>{invoice.invoiceNumber || 'Untitled'}</strong>
+          {invoice.id ? (
+            isDirty ? <span className="status unsaved">Unsaved changes</span> : <span className="status saved">Saved</span>
+          ) : (
+            <span className="status unsaved">Not saved yet</span>
+          )}
+        </div>
+        <div className="toolbar-buttons">
+          <button className="btn btn-light" onClick={newInvoice}>New</button>
+          <button className="btn btn-success" onClick={saveInvoice} title="Ctrl+S">Save</button>
+          <button className="btn btn-light" onClick={() => setModal('history')}>
+            Invoices{invoices.length ? ` (${invoices.length})` : ''}
+          </button>
+          <button className="btn btn-light" onClick={() => setModal('clients')}>Clients</button>
+          <button className="btn btn-light" onClick={() => openSettings('business')}>Settings</button>
+          <span className="toolbar-sep" />
+          <button className="btn" onClick={() => downloadInvoiceHTML(previewRef.current, title, fileName)}>Export HTML</button>
+          <button className="btn" onClick={() => printInvoice(previewRef.current, title)} title="Choose 'Save as PDF' in the print dialog for a PDF">
+            Print / PDF
+          </button>
+        </div>
       </div>
 
       <div className="container">
         <InvoiceEditor
-          invoiceData={invoiceData}
-          updateInvoiceData={updateInvoiceData}
-          addItem={addItem}
-          updateItem={updateItem}
-          removeItem={removeItem}
-          moveItemUp={moveItemUp}
-          moveItemDown={moveItemDown}
-          selectedClient={selectedClient}
+          invoice={invoice}
+          setInvoice={setInvoice}
+          settings={settings}
           clients={clients}
-          handleClientChange={handleClientChange}
+          itemTemplates={itemTemplates}
+          suggestions={suggestions}
+          onManageClients={() => setModal('clients')}
+          onSaveClient={saveClientFromInvoice}
+          onSaveTemplate={saveTemplateFromItem}
+          onOpenSettings={openSettings}
         />
-        <InvoicePreview
-          invoiceData={invoiceData}
-          formatDate={formatDate}
-          formatCurrency={formatCurrency}
-        />
+        <InvoicePreview ref={previewRef} invoiceData={invoice} settings={settings} />
       </div>
+
+      {modal === 'clients' && (
+        <ClientManager clients={clients} setClients={setClients} onUseClient={applyClient} onClose={() => setModal(null)} />
+      )}
+      {modal === 'settings' && (
+        <SettingsPanel
+          settings={settings}
+          itemTemplates={itemTemplates}
+          initialTab={settingsTab}
+          onSave={saveSettings}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'history' && (
+        <InvoiceHistory
+          invoices={invoices}
+          currentId={invoice.id}
+          onOpen={openInvoice}
+          onDuplicate={duplicateInvoice}
+          onDelete={deleteInvoice}
+          onTogglePaid={togglePaid}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
