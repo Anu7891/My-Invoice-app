@@ -1,80 +1,66 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import './InvoiceEditor.css';
+import SelectOrCustom from './SelectOrCustom';
+import {
+  ArrowDown,
+  ArrowUp,
+  Building2,
+  ChevronDown,
+  Copy,
+  GripVertical,
+  Hash,
+  Landmark,
+  Package,
+  Pencil,
+  Plus,
+  Save,
+  Settings2,
+  StickyNote,
+  Trash2,
+  Truck,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import {
   addDaysISO,
   applyClientToInvoice,
   calcTotals,
   formatCurrency,
+  formatDate,
   itemAmount,
   itemFromTemplate,
   makeItem,
   newId,
-  num,
   priceOptions,
   weightToTons,
 } from '../utils/invoice';
 
-const Field = ({ label, children, className = '' }) => (
+const Field = ({ label, hint, children, className = '' }) => (
   <div className={`form-group ${className}`}>
     <label>{label}</label>
     {children}
+    {hint && <div className="field-hint">{hint}</div>}
   </div>
 );
 
-/**
- * Dropdown of common values + "Custom…" to type anything else.
- * Used for Price (₹300–₹900) and for From / To locations.
- */
-const SelectOrCustom = ({ value, options, onChange, placeholder, format = (o) => o, numeric = false, emptyLabel = 'Select…' }) => {
-  const str = String(value ?? '').trim();
-  const match = (o) => (numeric ? o === num(str) : String(o).toLowerCase() === str.toLowerCase());
-  const found = str !== '' ? options.find(match) : undefined;
-  const inList = found !== undefined;
-  const [custom, setCustom] = useState(!inList && str !== '');
-  const typedRef = useRef(null);
-  // If the value was changed from outside (not typed here) and is in the list, show it in the dropdown
-  useEffect(() => {
-    if (value !== typedRef.current && inList && custom) setCustom(false);
-    // eslint-disable-next-line
-  }, [value]);
-  const showInput = custom || (!inList && str !== '') || options.length === 0;
-
+/** Section card with an icon header. collapsible cards start closed when defaultOpen=false. */
+const Card = ({ icon: Icon, title, subtitle, actions, children, collapsible, defaultOpen = true, className = '' }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  const isOpen = !collapsible || open;
+  const Head = collapsible ? 'button' : 'div';
   return (
-    <div className="price-picker">
-      {options.length > 0 && (
-        <select
-          value={showInput ? '__custom' : inList ? String(found) : ''}
-          onChange={(e) => {
-            if (e.target.value === '__custom') {
-              setCustom(true);
-              if (inList) onChange('');
-            } else {
-              setCustom(false);
-              onChange(e.target.value);
-            }
-          }}
-        >
-          <option value="">{emptyLabel}</option>
-          {options.map((o) => (
-            <option key={o} value={String(o)}>{format(o)}</option>
-          ))}
-          <option value="__custom">Custom…</option>
-        </select>
-      )}
-      {showInput && (
-        <input
-          type="text"
-          inputMode={numeric ? 'decimal' : undefined}
-          autoFocus={custom && str === ''}
-          value={value}
-          onChange={(e) => {
-            typedRef.current = e.target.value;
-            onChange(e.target.value);
-          }}
-          placeholder={placeholder}
-        />
-      )}
-    </div>
+    <section className={`card ${className} ${isOpen ? '' : 'is-closed'}`}>
+      <Head className="card-head" {...(collapsible ? { type: 'button', onClick: () => setOpen((o) => !o), 'aria-expanded': open } : {})}>
+        <span className="card-icon"><Icon size={16} /></span>
+        <span className="card-titles">
+          <span className="card-title">{title}</span>
+          {subtitle && <span className="card-subtitle">{subtitle}</span>}
+        </span>
+        {actions && <span className="card-actions" onClick={(e) => e.stopPropagation()}>{actions}</span>}
+        {collapsible && <ChevronDown className={`chev ${open ? 'up' : ''}`} size={18} />}
+      </Head>
+      {isOpen && <div className="card-body">{children}</div>}
+    </section>
   );
 };
 
@@ -90,6 +76,9 @@ const InvoiceEditor = ({
   onSaveTemplate,
   onOpenSettings,
   onOpenScan,
+  onSave,
+  isDirty,
+  isSaved,
 }) => {
   const [collapsed, setCollapsed] = useState({});
   const [drag, setDrag] = useState({ from: null, over: null, after: false });
@@ -215,106 +204,137 @@ const InvoiceEditor = ({
   const toggleAll = () =>
     setCollapsed(allCollapsed ? {} : Object.fromEntries(invoice.items.map((it) => [it.id, true])));
 
-  return (
-    <div className="editor-panel">
-      <h2>Invoice Editor</h2>
 
-      {/* Datalists = autocomplete suggestions learned from your past invoices */}
+  const [editClient, setEditClient] = useState(false);
+  const showClientFields = editClient || !linkedClient;
+
+  return (
+    <div className="editor">
+      {/* Autocomplete suggestions learned from past invoices */}
       <datalist id="dl-titles">{suggestions.titles.map((v) => <option key={v} value={v} />)}</datalist>
       <datalist id="dl-places">{suggestions.places.map((v) => <option key={v} value={v} />)}</datalist>
       <datalist id="dl-delivered">{suggestions.deliveredTo.map((v) => <option key={v} value={v} />)}</datalist>
       <datalist id="dl-trucks">{suggestions.trucks.map((v) => <option key={v} value={v} />)}</datalist>
       <datalist id="dl-labels">{suggestions.extraLabels.map((v) => <option key={v} value={v} />)}</datalist>
 
-      {/* Invoice Details */}
-      <div className="section">
-        <h3>Invoice Details</h3>
-        <div className="form-row">
-          <Field label="Invoice Number:">
+      {/* ---------- Invoice ---------- */}
+      <Card icon={Hash} title="Invoice details" subtitle="Number, dates and tax">
+        <div className="grid-2 keep-2">
+          <Field label="Invoice number">
             <input type="text" {...bind('invoiceNumber')} />
           </Field>
-          <Field label="Invoice Date:">
+          <Field label="Invoice date">
             <input type="date" value={invoice.invoiceDate} onChange={(e) => changeInvoiceDate(e.target.value)} />
           </Field>
-        </div>
-        <div className="form-row">
-          <Field label="Due Date:">
+          <Field label="Due date" hint={settings.dueDays ? `Auto: ${settings.dueDays} days after invoice date` : null}>
             <input type="date" {...bind('dueDate')} />
           </Field>
-          <Field label={`${settings.taxLabel || 'Tax'} rate (%):`}>
-            <input type="number" min="0" step="0.01" {...bind('taxRate')} placeholder="0 = no tax" />
+          <Field label={`${settings.taxLabel || 'Tax'} rate`}>
+            <div className="input-affix">
+              <input type="number" min="0" step="0.01" inputMode="decimal" {...bind('taxRate')} placeholder="0" />
+              <span>%</span>
+            </div>
           </Field>
         </div>
-      </div>
+      </Card>
 
-      {/* Bill To */}
-      <div className="section">
-        <div className="section-title-row">
-          <h3>Bill To</h3>
-          <button className="btn btn-sm btn-light" onClick={onManageClients}>Manage clients</button>
-        </div>
-        <Field label="Select Client:">
-          <select className="client-select" value={invoice.clientId || ''} onChange={(e) => selectClient(e.target.value)}>
-            <option value="">— Type a new client below —</option>
+      {/* ---------- Bill to ---------- */}
+      <Card
+        icon={Building2}
+        title="Bill to"
+        subtitle={linkedClient ? 'Saved client' : 'New client'}
+        actions={<button className="btn btn-ghost btn-sm" onClick={onManageClients}>Manage</button>}
+      >
+        <Field label="Client">
+          <select value={invoice.clientId || ''} onChange={(e) => { selectClient(e.target.value); setEditClient(false); }}>
+            <option value="">+ New client (type details)</option>
             {clients.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         </Field>
-        <Field label="Client Name:">
-          <input type="text" {...bind('clientName')} />
-        </Field>
-        <Field label="Client Address:">
-          <textarea rows="4" {...bind('clientAddress')} />
-        </Field>
-        <div className="form-row">
-          <Field label="GST Number:">
-            <input type="text" {...bind('gstNumber')} />
-          </Field>
-          <Field label="Client Phone:">
-            <input type="text" {...bind('clientPhone')} />
-          </Field>
-        </div>
-        <Field label="Client Email:">
-          <input type="email" {...bind('clientEmail')} />
-        </Field>
-        {!linkedClient && invoice.clientName.trim() && (
-          <button className="btn btn-sm btn-success" onClick={() => onSaveClient(false)}>
-            + Save "{invoice.clientName.trim()}" to client list
-          </button>
-        )}
-        {clientChanged && (
-          <div className="hint-row">
-            <span className="muted">You changed this client's details.</span>
-            <button className="btn btn-sm" onClick={() => onSaveClient(true)}>Update saved client</button>
+
+        {linkedClient && !editClient && (
+          <div className="client-summary">
+            <div className="client-avatar">{(invoice.clientName || '?').trim().charAt(0).toUpperCase()}</div>
+            <div className="client-info">
+              <strong>{invoice.clientName}</strong>
+              <span className="pre">{invoice.clientAddress}</span>
+              <span className="client-meta">
+                {[invoice.gstNumber, invoice.clientPhone, invoice.clientEmail].filter(Boolean).join(' · ')}
+              </span>
+              {linkedClient.defaultFrom && <span className="badge badge-brand">Trips from {linkedClient.defaultFrom}</span>}
+            </div>
+            <button className="btn btn-light btn-sm" onClick={() => setEditClient(true)}><Pencil />Edit</button>
           </div>
         )}
-      </div>
 
-      {/* Items */}
-      <div className="section">
-        <div className="section-title-row">
-          <h3>Items ({invoice.items.length})</h3>
-          {invoice.items.length > 1 && (
-            <button className="btn btn-sm btn-light" onClick={toggleAll}>{allCollapsed ? 'Expand all' : 'Collapse all'}</button>
-          )}
-        </div>
-
-        <div className="items-container">
-          {invoice.items.length === 0 && (
-            <div className="empty-items">
-              <div className="big">🧾</div>
-              <div>No items yet. Add one with the buttons below{onOpenScan ? ', or scan a photo of a slip' : ''}.</div>
+        {showClientFields && (
+          <div className="client-fields">
+            <Field label="Client name">
+              <input type="text" {...bind('clientName')} placeholder="Company name" />
+            </Field>
+            <Field label="Address">
+              <textarea rows="3" {...bind('clientAddress')} />
+            </Field>
+            <div className="grid-2">
+              <Field label="GST number">
+                <input type="text" {...bind('gstNumber')} />
+              </Field>
+              <Field label="Phone">
+                <input type="text" inputMode="tel" {...bind('clientPhone')} />
+              </Field>
             </div>
-          )}
+            <Field label="Email">
+              <input type="email" {...bind('clientEmail')} />
+            </Field>
+            <div className="row-end">
+              {linkedClient && (
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditClient(false)}>Done</button>
+              )}
+              {clientChanged && (
+                <button className="btn btn-light btn-sm" onClick={() => onSaveClient(true)}><Save />Update saved client</button>
+              )}
+              {!linkedClient && invoice.clientName.trim() && (
+                <button className="btn btn-light btn-sm" onClick={() => onSaveClient(false)}><UserPlus />Save to clients</button>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* ---------- Items ---------- */}
+      <Card
+        icon={Package}
+        title="Items"
+        subtitle={`${invoice.items.length} item${invoice.items.length === 1 ? '' : 's'}`}
+        actions={
+          invoice.items.length > 1 && (
+            <button className="btn btn-ghost btn-sm" onClick={toggleAll}>{allCollapsed ? 'Expand all' : 'Collapse all'}</button>
+          )
+        }
+        className="card-items"
+      >
+        {invoice.items.length === 0 && (
+          <div className="empty">
+            <div className="empty-icon"><Package size={22} /></div>
+            <strong>No items yet</strong>
+            <span>Add a trip with one of the buttons below{onOpenScan ? ', or scan a slip' : ''}.</span>
+          </div>
+        )}
+
+        <div className="item-list">
           {invoice.items.map((item, index) => {
             const isCollapsed = !!collapsed[item.id];
             const dropClass =
               drag.over === item.id && drag.from !== item.id ? (drag.after ? ' drop-after' : ' drop-before') : '';
+            const meta = [item.truckNo, item.deliveryDate && formatDate(item.deliveryDate), [item.fromLocation, item.toLocation].filter(Boolean).join(' → ')]
+              .filter(Boolean)
+              .join(' · ');
             return (
-              <div
+              <article
                 key={item.id}
-                className={`item-row${isCollapsed ? ' collapsed' : ''}${drag.from === item.id ? ' dragging' : ''}${dropClass}`}
+                className={`item${isCollapsed ? ' is-collapsed' : ''}${drag.from === item.id ? ' is-dragging' : ''}${dropClass}`}
                 onDragOver={(e) => {
                   if (drag.from === null) return;
                   e.preventDefault();
@@ -329,7 +349,7 @@ const InvoiceEditor = ({
                   dropItem();
                 }}
               >
-                <div className="item-header">
+                <header className="item-head">
                   <span
                     className="drag-handle"
                     draggable
@@ -341,197 +361,189 @@ const InvoiceEditor = ({
                     }}
                     onDragEnd={() => setDrag({ from: null, over: null, after: false })}
                   >
-                    ⋮⋮
+                    <GripVertical size={16} />
                   </span>
+                  <span className="item-index">{index + 1}</span>
                   <button
-                    className="item-toggle"
+                    type="button"
+                    className="item-summary"
                     onClick={() => setCollapsed((c) => ({ ...c, [item.id]: !c[item.id] }))}
-                    title={isCollapsed ? 'Expand' : 'Collapse'}
+                    aria-expanded={!isCollapsed}
                   >
-                    <span>{isCollapsed ? '▸' : '▾'}</span>
-                    <h4>
-                      {index + 1}. {item.title || 'Untitled item'}
-                      <span className="item-amount">{formatCurrency(itemAmount(item))}</span>
-                    </h4>
+                    <span className="item-name">{item.title || 'Untitled item'}</span>
+                    {meta && <span className="item-meta">{meta}</span>}
                   </button>
-                  <div className="item-controls">
-                    <button className="btn btn-move" onClick={() => moveItem(item.id, -1)} disabled={index === 0} title="Move Up">↑</button>
-                    <button className="btn btn-move" onClick={() => moveItem(item.id, 1)} disabled={index === invoice.items.length - 1} title="Move Down">↓</button>
-                    <button className="btn btn-move" onClick={() => duplicateItem(item.id)} title="Duplicate">⧉</button>
-                    <button className="btn btn-move btn-move-danger" onClick={() => removeItem(item.id)} title="Remove">✕</button>
+                  <span className="item-amount tnum">{formatCurrency(itemAmount(item))}</span>
+                  <div className="item-tools">
+                    <button className="tool" onClick={() => moveItem(item.id, -1)} disabled={index === 0} title="Move up" aria-label="Move up"><ArrowUp size={16} /></button>
+                    <button className="tool" onClick={() => moveItem(item.id, 1)} disabled={index === invoice.items.length - 1} title="Move down" aria-label="Move down"><ArrowDown size={16} /></button>
+                    <button className="tool" onClick={() => duplicateItem(item.id)} title="Duplicate" aria-label="Duplicate"><Copy size={16} /></button>
+                    <button className="tool tool-danger" onClick={() => removeItem(item.id)} title="Remove" aria-label="Remove"><Trash2 size={16} /></button>
+                    <button className="tool" onClick={() => setCollapsed((c) => ({ ...c, [item.id]: !c[item.id] }))} title={isCollapsed ? 'Expand' : 'Collapse'} aria-label="Toggle">
+                      <ChevronDown size={18} className={`chev ${isCollapsed ? '' : 'up'}`} />
+                    </button>
                   </div>
-                </div>
+                </header>
 
                 {!isCollapsed && (
-                  <>
-                    <Field label="Item Title:">
+                  <div className="item-body">
+                    <Field label="Item">
                       <input
                         type="text"
                         list="dl-titles"
                         value={item.title}
                         onChange={(e) => updateItem(item.id, 'title', e.target.value)}
-                        placeholder="e.g., Transport, Weighing Bill"
+                        placeholder="e.g. Transport, Weighing Bill"
                       />
                     </Field>
 
-                    <div className="item-details-section">
-                      <h5>Item Details <span className="muted">(leave blank to hide on invoice)</span></h5>
-                      <div className="form-row">
-                        <Field label="Delivered To:">
-                          <input type="text" list="dl-delivered" value={item.deliveredTo} onChange={(e) => updateItem(item.id, 'deliveredTo', e.target.value)} />
+                    <div className="subsection">
+                      <div className="subsection-title"><Truck size={14} />Trip details <span>· blank fields are hidden on the invoice</span></div>
+                      <div className="grid-2">
+                        <Field label="From">
+                          <SelectOrCustom value={item.fromLocation} options={locations} emptyLabel="Select place" placeholder="Type a place" onChange={(v) => updateItem(item.id, 'fromLocation', v)} />
                         </Field>
-                        <Field label="Delivery Date:">
+                        <Field label="To">
+                          <SelectOrCustom value={item.toLocation} options={locations} emptyLabel="Select place" placeholder="Type a place" onChange={(v) => updateItem(item.id, 'toLocation', v)} />
+                        </Field>
+                        <Field label="Delivered to">
+                          <input type="text" list="dl-delivered" value={item.deliveredTo} onChange={(e) => updateItem(item.id, 'deliveredTo', e.target.value)} placeholder="e.g. Saturn Godown" />
+                        </Field>
+                        <Field label="Delivery date">
                           <input type="date" value={item.deliveryDate} onChange={(e) => updateItem(item.id, 'deliveryDate', e.target.value)} />
                         </Field>
-                      </div>
-                      <div className="form-row">
-                        <Field label="From Location:">
-                          <SelectOrCustom
-                            value={item.fromLocation}
-                            options={locations}
-                            emptyLabel="Select place…"
-                            placeholder="Type place"
-                            onChange={(v) => updateItem(item.id, 'fromLocation', v)}
-                          />
-                        </Field>
-                        <Field label="To Location:">
-                          <SelectOrCustom
-                            value={item.toLocation}
-                            options={locations}
-                            emptyLabel="Select place…"
-                            placeholder="Type place"
-                            onChange={(v) => updateItem(item.id, 'toLocation', v)}
-                          />
-                        </Field>
-                      </div>
-                      <div className="form-row">
-                        <Field label="Truck No:">
+                        <Field label="Truck no.">
                           <input type="text" list="dl-trucks" value={item.truckNo} onChange={(e) => updateItem(item.id, 'truckNo', e.target.value.toUpperCase())} />
                         </Field>
-                        <Field label="Weight:">
-                          <input type="text" value={item.weight} onChange={(e) => updateItem(item.id, 'weight', e.target.value)} placeholder="e.g., 29065kg" />
+                        <Field label="Weight">
+                          <input type="text" value={item.weight} onChange={(e) => updateItem(item.id, 'weight', e.target.value)} placeholder="e.g. 29065kg" />
                         </Field>
                       </div>
 
                       {(item.extraDetails || []).map((d) => (
-                        <div key={d.id} className="form-row extra-row">
-                          <Field label="Label:">
-                            <input type="text" list="dl-labels" value={d.label} onChange={(e) => updateExtra(item.id, d.id, 'label', e.target.value)} placeholder="e.g., Challan No" />
-                          </Field>
-                          <Field label="Value:">
-                            <input type="text" value={d.value} onChange={(e) => updateExtra(item.id, d.id, 'value', e.target.value)} />
-                          </Field>
-                          <button className="btn btn-move btn-move-danger" onClick={() => removeExtra(item.id, d.id)} title="Remove line">✕</button>
+                        <div key={d.id} className="extra-row">
+                          <input type="text" list="dl-labels" value={d.label} onChange={(e) => updateExtra(item.id, d.id, 'label', e.target.value)} placeholder="Label (e.g. Challan No)" aria-label="Detail label" />
+                          <input type="text" value={d.value} onChange={(e) => updateExtra(item.id, d.id, 'value', e.target.value)} placeholder="Value" aria-label="Detail value" />
+                          <button className="tool tool-danger" onClick={() => removeExtra(item.id, d.id)} title="Remove line" aria-label="Remove line"><X size={16} /></button>
                         </div>
                       ))}
-                      <button className="btn btn-sm btn-light" onClick={() => addExtra(item.id)}>+ Add custom detail</button>
+                      <button className="btn btn-ghost btn-sm add-detail" onClick={() => addExtra(item.id)}><Plus />Add detail</button>
                     </div>
 
-                    <div className="checkbox-row">
-                      <label className="checkbox-label">
-                        <input type="checkbox" checked={!!item.isFixedPrice} onChange={(e) => updateItem(item.id, 'isFixedPrice', e.target.checked)} />
-                        Fixed Price (not per unit)
-                      </label>
-                      <label className="checkbox-label">
-                        <input type="checkbox" checked={!!item.qtyFromWeight} onChange={(e) => updateItem(item.id, 'qtyFromWeight', e.target.checked)} />
-                        Quantity = weight in tons
-                      </label>
+                    <div className="pricing">
+                      <div className="pricing-switches">
+                        <label className="switch">
+                          <input type="checkbox" checked={!!item.qtyFromWeight} onChange={(e) => updateItem(item.id, 'qtyFromWeight', e.target.checked)} />
+                          <span className="track" />Quantity from weight (tons)
+                        </label>
+                        <label className="switch">
+                          <input type="checkbox" checked={!!item.isFixedPrice} onChange={(e) => updateItem(item.id, 'isFixedPrice', e.target.checked)} />
+                          <span className="track" />Fixed price
+                        </label>
+                      </div>
+                      <div className="pricing-grid">
+                        <Field label="Quantity">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={item.quantity}
+                            onChange={(e) => updateItem(item.id, 'quantity', e.target.value)}
+                            placeholder={item.isFixedPrice ? 'Reference only' : '0'}
+                          />
+                        </Field>
+                        <Field label={item.isFixedPrice ? 'Fixed price' : 'Rate (₹)'}>
+                          <SelectOrCustom
+                            numeric
+                            value={item.price}
+                            options={prices}
+                            format={(o) => `₹${o}`}
+                            emptyLabel="Select rate"
+                            onChange={(v) => updateItem(item.id, 'price', v)}
+                            placeholder={item.isFixedPrice ? 'Amount' : 'Type rate'}
+                          />
+                        </Field>
+                        <div className="form-group amount-cell">
+                          <label>Amount</label>
+                          <div className="amount-value tnum">{formatCurrency(itemAmount(item))}</div>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="form-row">
-                      <Field label="Quantity:">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={item.quantity}
-                          onChange={(e) => updateItem(item.id, 'quantity', e.target.value)}
-                          placeholder={item.isFixedPrice ? 'For reference only' : ''}
-                        />
-                      </Field>
-                      <Field label={item.isFixedPrice ? 'Fixed Price (₹):' : 'Price (₹):'}>
-                        <SelectOrCustom
-                          numeric
-                          value={item.price}
-                          options={prices}
-                          format={(o) => `₹${o}`}
-                          emptyLabel="Select price…"
-                          onChange={(v) => updateItem(item.id, 'price', v)}
-                          placeholder={item.isFixedPrice ? 'Enter fixed amount' : 'Type price per unit'}
-                        />
-                      </Field>
-                    </div>
-                    <div className="item-footer">
-                      <span>Amount: <strong>{formatCurrency(itemAmount(item))}</strong></span>
-                      {item.title.trim() && !itemTemplates.some((t) => t.title.toLowerCase() === item.title.trim().toLowerCase()) && (
-                        <button className="btn btn-sm btn-light" onClick={() => onSaveTemplate(item)}>Save as quick-add template</button>
-                      )}
-                    </div>
-                  </>
+                    {item.title.trim() && !itemTemplates.some((t) => t.title.toLowerCase() === item.title.trim().toLowerCase()) && (
+                      <div className="row-end">
+                        <button className="btn btn-ghost btn-sm" onClick={() => onSaveTemplate(item)}><Plus />Save as quick-add</button>
+                      </div>
+                    )}
+                  </div>
                 )}
-              </div>
+              </article>
             );
           })}
         </div>
 
-        <div className="quick-add">
-          <span className="muted">Add:</span>
+        <div className="add-bar">
+          <span className="add-label">Add</span>
           {onOpenScan && (
-            <button className="btn btn-sm btn-scan" onClick={onOpenScan} title="Read a weighbridge slip / challan photo">📷 From photo</button>
+            <button className="btn btn-light btn-sm" onClick={onOpenScan}>📷 From photo</button>
           )}
           {itemTemplates.map((t) => (
-            <button key={t.id} className="btn btn-sm" onClick={() => addFromTemplate(t)} title={`₹${t.price}${t.isFixedPrice ? ' fixed' : ' per unit'}`}>
-              + {t.title}
+            <button key={t.id} className="btn btn-light btn-sm" onClick={() => addFromTemplate(t)} title={`₹${t.price}${t.isFixedPrice ? ' fixed' : ' per unit'}`}>
+              <Plus />{t.title}
             </button>
           ))}
-          <button className="btn btn-sm btn-light" onClick={addBlank}>+ Blank item</button>
-          <button className="btn btn-sm btn-light" onClick={() => onOpenSettings('items')} title="Edit quick-add buttons">⚙</button>
+          <button className="btn btn-ghost btn-sm" onClick={addBlank}><Plus />Blank</button>
+          <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onOpenSettings('items')} title="Edit quick-add buttons" aria-label="Edit quick-add buttons">
+            <Settings2 />
+          </button>
         </div>
-        {lastItem && <p className="muted small-note">New items copy the delivery details of the last item.</p>}
-        {invoice.items.length > 0 && (
-          <div className="items-total">
-            <span>
-              {invoice.items.length} item{invoice.items.length === 1 ? '' : 's'}
-              {totals.taxRate > 0 ? ` + ${settings.taxLabel || 'Tax'} ${totals.taxRate}%` : ''}
-            </span>
-            <strong key={totals.total} className="bump">{formatCurrency(totals.total)}</strong>
+      </Card>
+
+      {/* ---------- Notes ---------- */}
+      <Card icon={StickyNote} title="Notes" subtitle="Optional — printed below the items" collapsible defaultOpen={!!invoice.notes}>
+        <textarea rows="3" {...bind('notes')} placeholder="e.g. Thank you for your business" />
+      </Card>
+
+      {/* ---------- Business snapshot ---------- */}
+      <Card icon={Landmark} title="Your business, bank & signature" subtitle="Pre-filled from Settings · changes apply to this invoice only" collapsible defaultOpen={false}>
+        <Field label="Business name"><input type="text" {...bind('companyName')} /></Field>
+        <Field label="Address"><textarea rows="3" {...bind('companyAddress')} /></Field>
+        <div className="grid-2">
+          <Field label="PAN"><input type="text" {...bind('panNumber')} /></Field>
+          <Field label="Phone"><input type="text" inputMode="tel" {...bind('phoneNumber')} /></Field>
+        </div>
+        <Field label="Email"><input type="email" {...bind('email')} /></Field>
+        <Field label="Bank"><input type="text" {...bind('bankName')} /></Field>
+        <div className="grid-2">
+          <Field label="Account number"><input type="text" {...bind('accountNumber')} /></Field>
+          <Field label="IFSC"><input type="text" {...bind('ifscCode')} /></Field>
+          <Field label="Signature name"><input type="text" {...bind('signatureName')} /></Field>
+          <Field label="Signature date"><input type="date" {...bind('signatureDate')} /></Field>
+        </div>
+        <button className="link-btn" onClick={() => onOpenSettings('business')}>Change the defaults in Settings →</button>
+      </Card>
+
+      {/* ---------- Sticky summary ---------- */}
+      <div className="summary-bar">
+        <div className="summary-figures">
+          <div className="summary-line">
+            <span>Subtotal</span>
+            <span className="tnum">{formatCurrency(totals.subtotal)}</span>
           </div>
-        )}
+          {totals.taxRate > 0 && (
+            <div className="summary-line">
+              <span>{settings.taxLabel || 'Tax'} {totals.taxRate}%</span>
+              <span className="tnum">{formatCurrency(totals.tax)}</span>
+            </div>
+          )}
+        </div>
+        <div className="summary-total">
+          <span>Total</span>
+          <strong className="tnum" key={totals.total}>{formatCurrency(totals.total)}</strong>
+        </div>
+        <button className="btn btn-lg summary-save" onClick={onSave} disabled={isSaved && !isDirty}>
+          <Save />{isSaved && !isDirty ? 'Saved' : 'Save'}
+        </button>
       </div>
-
-      {/* Notes */}
-      <div className="section">
-        <h3>Notes</h3>
-        <Field label="Optional — printed under the items:">
-          <textarea rows="2" {...bind('notes')} placeholder="e.g., Thank you for your business" />
-        </Field>
-      </div>
-
-      {/* Business & payment snapshot for this invoice */}
-      <details className="section details-section">
-        <summary>
-          <h3>Your details, bank &amp; signature (this invoice)</h3>
-        </summary>
-        <p className="muted">
-          Pre-filled from <button className="link-btn" onClick={() => onOpenSettings('business')}>Settings</button>. Changes here only
-          affect this invoice.
-        </p>
-        <Field label="Company Name:"><input type="text" {...bind('companyName')} /></Field>
-        <Field label="Address:"><textarea rows="3" {...bind('companyAddress')} /></Field>
-        <div className="form-row">
-          <Field label="PAN Number:"><input type="text" {...bind('panNumber')} /></Field>
-          <Field label="Phone:"><input type="text" {...bind('phoneNumber')} /></Field>
-        </div>
-        <Field label="Email:"><input type="email" {...bind('email')} /></Field>
-        <Field label="Bank Name:"><input type="text" {...bind('bankName')} /></Field>
-        <div className="form-row">
-          <Field label="Account Number:"><input type="text" {...bind('accountNumber')} /></Field>
-          <Field label="IFSC Code:"><input type="text" {...bind('ifscCode')} /></Field>
-        </div>
-        <div className="form-row">
-          <Field label="Signature Name:"><input type="text" {...bind('signatureName')} /></Field>
-          <Field label="Signature Date:"><input type="date" {...bind('signatureDate')} /></Field>
-        </div>
-      </details>
     </div>
   );
 };

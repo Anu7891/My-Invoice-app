@@ -1,4 +1,5 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useLayoutEffect, useRef, useState } from 'react';
+import { Download, Printer } from 'lucide-react';
 import './InvoicePreview.css';
 import { amountInWords, calcTotals, formatCurrency, formatDate, itemAmount, num } from '../utils/invoice';
 
@@ -12,14 +13,50 @@ const Lines = ({ text }) =>
       </React.Fragment>
     ));
 
-// The element with ref is what gets exported / printed.
-const InvoicePreview = forwardRef(({ invoiceData, settings }, ref) => {
+const PAPER_W = 794; // A4 width at 96dpi
+
+/** Scales the A4 sheet down to fit the available width (never up). */
+function usePaperScale() {
+  const canvasRef = useRef(null);
+  const paperRef = useRef(null);
+  const [scale, setScale] = useState(1);
+  const [height, setHeight] = useState(1123);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const paper = paperRef.current;
+    if (!canvas || !paper) return undefined;
+    const update = () => {
+      const styles = getComputedStyle(canvas);
+      const avail = canvas.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+      setScale(Math.min(1, avail / PAPER_W));
+      setHeight(paper.offsetHeight);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(canvas);
+    ro.observe(paper);
+    return () => ro.disconnect();
+  }, []);
+  return { canvasRef, paperRef, scale, height };
+}
+
+// The element with ref (.invoice-preview) is what gets exported / printed.
+const InvoicePreview = forwardRef(({ invoiceData, settings, onPrint, onExport }, ref) => {
+  const { canvasRef, paperRef, scale, height } = usePaperScale();
   const { subtotal, taxRate, tax, total } = calcTotals(invoiceData);
   const signatureSrc = settings.signatureImage || `${process.env.PUBLIC_URL || ''}/images/sign.png`;
 
   return (
-    <div className="preview-panel">
-      <h2>Invoice Preview</h2>
+    <div className="preview" ref={canvasRef}>
+      <div className="preview-head">
+        <span className="preview-label">Preview <span>A4 · {Math.round(scale * 100)}%</span></span>
+        <div className="preview-actions">
+          {onPrint && <button className="btn btn-light btn-sm" onClick={onPrint}><Printer />Print / PDF</button>}
+          {onExport && <button className="btn btn-light btn-sm" onClick={onExport}><Download />Export</button>}
+        </div>
+      </div>
+      <div className="paper-frame" style={{ height: height * scale }}>
+      <div className="paper" ref={paperRef} style={{ transform: `scale(${scale})` }}>
       <div className="invoice-preview" ref={ref}>
         <div className="header-container">
           <div className="left-header">{invoiceData.companyName || 'COMPANY NAME'}</div>
@@ -173,6 +210,8 @@ const InvoicePreview = forwardRef(({ invoiceData, settings }, ref) => {
             </div>
           </div>
         </div>
+      </div>
+      </div>
       </div>
     </div>
   );

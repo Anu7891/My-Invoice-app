@@ -6,9 +6,23 @@ import ClientManager from './components/ClientManager';
 import SettingsPanel from './components/SettingsPanel';
 import InvoiceHistory from './components/InvoiceHistory';
 import ScanSlip from './components/ScanSlip';
-import './theme.css';
 import useAnimatedNumber from './hooks/useAnimatedNumber';
 import { FEATURES } from './features';
+import {
+  Check,
+  Download,
+  Eye,
+  FileText,
+  FolderOpen,
+  MoreHorizontal,
+  PencilLine,
+  Plus,
+  Printer,
+  Save,
+  Settings as SettingsIcon,
+  Users,
+  X,
+} from 'lucide-react';
 import usePersistentState from './hooks/usePersistentState';
 import { STORAGE_KEYS } from './utils/storage';
 import { downloadInvoiceHTML, printInvoice } from './utils/exportInvoice';
@@ -74,12 +88,26 @@ function App() {
     return inv;
   });
 
+  // Items with an empty "From" pick up the selected client's default (e.g. Abhishek → Ichchapore)
+  useEffect(() => {
+    const client = migrateClients(clients).find((c) => c.id === invoice.clientId);
+    if (!client || !client.defaultFrom) return;
+    if (invoice.items.some((it) => !it.fromLocation)) {
+      setInvoice((prev) => ({
+        ...prev,
+        items: prev.items.map((it) => (it.fromLocation ? it : { ...it, fromLocation: client.defaultFrom })),
+      }));
+    }
+    // eslint-disable-next-line
+  }, []);
+
   const [modal, setModal] = useState(null); // 'clients' | 'settings' | 'history'
   const [settingsTab, setSettingsTab] = useState('business');
   const [toast, setToast] = useState('');
   const [scanFiles, setScanFiles] = useState(null); // null = scanner closed, [] = open
   const [mobileView, setMobileView] = useState('edit');
   const [globalDrag, setGlobalDrag] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const previewRef = useRef(null);
 
   const showToast = useCallback((msg) => {
@@ -325,77 +353,138 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [saveInvoice]);
 
+  const doExport = () => downloadInvoiceHTML(previewRef.current, title, fileName);
+  const doPrint = () => printInvoice(previewRef.current, title);
+
+  const statusPill = invoice.id ? (
+    isDirty ? (
+      <span className="pill pill-warning"><span className="dot" />Unsaved changes</span>
+    ) : (
+      <span className="pill pill-success"><Check size={12} strokeWidth={3} />Saved</span>
+    )
+  ) : (
+    <span className="pill pill-neutral"><span className="dot" />Draft</span>
+  );
+
   return (
-    <div className="App">
-      <div className="toolbar">
-        <div className="toolbar-status">
-          <div className="brand">
-            <div className="brand-logo">₹</div>
-            <div className="brand-text">
-              <strong>{invoice.invoiceNumber || 'Untitled'}</strong>
-              <small>
-                {invoice.id ? (
-                  isDirty ? <span className="status unsaved">Unsaved changes</span> : <span className="status saved">Saved</span>
-                ) : (
-                  <span className="status unsaved">Not saved yet</span>
-                )}
-              </small>
-            </div>
+    <div className={`app view-${mobileView}`}>
+      {/* ---------------- Top bar ---------------- */}
+      <header className="topbar">
+        <div className="topbar-left">
+          <div className="logo" aria-hidden="true">
+            <FileText size={18} strokeWidth={2.2} />
           </div>
-          <div className="stat-chips">
-            <div className="stat-chip total">
-              This invoice <strong>{formatCurrency(animatedTotal)}</strong>
+          <div className="doc-title">
+            <div className="doc-title-row">
+              <h1>{invoice.invoiceNumber || 'Untitled invoice'}</h1>
+              {statusPill}
             </div>
-            <div className="stat-chip">
-              This month ({stats.monthCount}) <strong>{formatCurrency(stats.monthTotal)}</strong>
-            </div>
-            <div className="stat-chip">
-              Unpaid ({stats.unpaidCount}) <strong>{formatCurrency(stats.unpaidTotal)}</strong>
+            <div className="doc-sub">
+              {invoice.clientName || 'No client selected'}
+              <span className="sep">·</span>
+              <span className="tnum">{formatCurrency(animatedTotal)}</span>
             </div>
           </div>
         </div>
-        <div className="toolbar-buttons">
-          <button className="btn btn-light" onClick={newInvoice}>＋ New</button>
-          <button className="btn btn-success" onClick={saveInvoice} title="Ctrl+S">Save</button>
+
+        <div className="topbar-stats">
+          <div className="stat">
+            <span>This month</span>
+            <strong className="tnum">{formatCurrency(stats.monthTotal)}</strong>
+          </div>
+          <div className="stat">
+            <span>Unpaid ({stats.unpaidCount})</span>
+            <strong className="tnum">{formatCurrency(stats.unpaidTotal)}</strong>
+          </div>
+        </div>
+
+        <nav className="topbar-actions">
+          <button className="btn btn-ghost hide-mobile" onClick={() => setModal('history')}>
+            <FolderOpen />Invoices{invoices.length > 0 && <span className="count">{invoices.length}</span>}
+          </button>
+          <button className="btn btn-ghost hide-mobile" onClick={() => setModal('clients')}>
+            <Users />Clients
+          </button>
+          <button className="btn btn-ghost btn-icon hide-mobile" onClick={() => openSettings('business')} title="Settings" aria-label="Settings">
+            <SettingsIcon />
+          </button>
+          <span className="divider hide-mobile" />
           {FEATURES.scan && (
-            <button className="btn btn-scan hide-mobile" onClick={() => openScan()} title="Fill items from a photo of a slip">📷 Scan</button>
+            <button className="btn btn-light hide-mobile" onClick={() => openScan()}>📷 Scan</button>
           )}
-          <button className="btn btn-light" onClick={() => setModal('history')}>
-            Invoices{invoices.length ? ` (${invoices.length})` : ''}
+          <button className="btn btn-light hide-mobile" onClick={doPrint} title="Print, or choose 'Save as PDF'">
+            <Printer />Print
           </button>
-          <button className="btn btn-light" onClick={() => setModal('clients')}>Clients</button>
-          <button className="btn btn-light" onClick={() => openSettings('business')}>Settings</button>
-          <span className="toolbar-sep" />
-          <button className="btn" onClick={() => downloadInvoiceHTML(previewRef.current, title, fileName)}>Export</button>
-          <button className="btn" onClick={() => printInvoice(previewRef.current, title)} title="Choose 'Save as PDF' in the print dialog for a PDF">
-            Print / PDF
+          <button className="btn btn-light hide-mobile" onClick={doExport} title="Download as an HTML file">
+            <Download />Export
           </button>
-        </div>
-      </div>
+          <button className="btn btn-light btn-icon-mobile" onClick={newInvoice} title="New invoice" aria-label="New invoice">
+            <Plus /><span className="hide-mobile">New</span>
+          </button>
+          <button className="btn hide-mobile" onClick={saveInvoice} title="Save (Ctrl+S)">
+            <Save />Save<span className="kbd">Ctrl S</span>
+          </button>
+        </nav>
+      </header>
 
-      <div className="view-switch" role="tablist">
-        <button className={mobileView === 'edit' ? 'active' : ''} onClick={() => setMobileView('edit')}>✏️ Edit</button>
-        <button className={mobileView === 'preview' ? 'active' : ''} onClick={() => setMobileView('preview')}>
-          👁 Preview · {formatCurrency(animatedTotal)}
+      {/* ---------------- Workspace ---------------- */}
+      <main className="workspace">
+        <section className="pane pane-editor" aria-label="Editor">
+          <InvoiceEditor
+            invoice={invoice}
+            setInvoice={setInvoice}
+            settings={settings}
+            clients={clients}
+            itemTemplates={itemTemplates}
+            suggestions={suggestions}
+            onManageClients={() => setModal('clients')}
+            onSaveClient={saveClientFromInvoice}
+            onSaveTemplate={saveTemplateFromItem}
+            onOpenSettings={openSettings}
+            onOpenScan={FEATURES.scan ? () => openScan() : null}
+            onSave={saveInvoice}
+            isDirty={isDirty}
+            isSaved={!!invoice.id}
+          />
+        </section>
+        <section className="pane pane-preview" aria-label="Preview">
+          <InvoicePreview ref={previewRef} invoiceData={invoice} settings={settings} onPrint={doPrint} onExport={doExport} />
+        </section>
+      </main>
+
+      {/* ---------------- Mobile tab bar ---------------- */}
+      <nav className="tabbar" aria-label="Main">
+        <button className={mobileView === 'edit' ? 'active' : ''} onClick={() => setMobileView('edit')}>
+          <PencilLine /><span>Edit</span>
         </button>
-      </div>
+        <button className={mobileView === 'preview' ? 'active' : ''} onClick={() => setMobileView('preview')}>
+          <Eye /><span>Preview</span>
+        </button>
+        <button onClick={() => setModal('history')}>
+          <FolderOpen /><span>Invoices</span>
+          {invoices.length > 0 && <i className="tab-badge">{invoices.length}</i>}
+        </button>
+        <button onClick={() => setModal('clients')}>
+          <Users /><span>Clients</span>
+        </button>
+        <button onClick={() => setSheet(true)}>
+          <MoreHorizontal /><span>More</span>
+        </button>
+      </nav>
 
-      <div className={`container show-${mobileView}`}>
-        <InvoiceEditor
-          invoice={invoice}
-          setInvoice={setInvoice}
-          settings={settings}
-          clients={clients}
-          itemTemplates={itemTemplates}
-          suggestions={suggestions}
-          onManageClients={() => setModal('clients')}
-          onSaveClient={saveClientFromInvoice}
-          onSaveTemplate={saveTemplateFromItem}
-          onOpenSettings={openSettings}
-          onOpenScan={FEATURES.scan ? () => openScan() : null}
-        />
-        <InvoicePreview ref={previewRef} invoiceData={invoice} settings={settings} />
-      </div>
+      {/* "More" action sheet (mobile) */}
+      {sheet && (
+        <div className="sheet-backdrop" onClick={() => setSheet(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()} role="menu">
+            <div className="sheet-handle" />
+            <button className="sheet-item" onClick={() => { setSheet(false); newInvoice(); }}><Plus />New invoice</button>
+            <button className="sheet-item" onClick={() => { setSheet(false); doPrint(); }}><Printer />Print / Save as PDF</button>
+            <button className="sheet-item" onClick={() => { setSheet(false); doExport(); }}><Download />Export HTML file</button>
+            <button className="sheet-item" onClick={() => { setSheet(false); openSettings('business'); }}><SettingsIcon />Settings</button>
+            <button className="sheet-item muted-item" onClick={() => setSheet(false)}><X />Close</button>
+          </div>
+        </div>
+      )}
 
       {modal === 'clients' && (
         <ClientManager clients={clients} setClients={setClients} onUseClient={applyClient} locations={settings.locations} onClose={() => setModal(null)} />
@@ -435,17 +524,18 @@ function App() {
         />
       )}
 
-      {FEATURES.scan && (
-        <button className="fab" onClick={() => openScan()} aria-label="Scan a slip with the camera" title="Scan slip">📷</button>
-      )}
-
       {globalDrag && (
         <div className="global-drop">
-          <div>📷 Drop the photo to read it</div>
+          <div>Drop the photo to read it</div>
         </div>
       )}
 
-      {toast && <div className="toast" key={toast}>{toast}</div>}
+      {toast && (
+        <div className="toast" key={toast} role="status">
+          <span className="toast-icon"><Check size={14} strokeWidth={3} /></span>
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
