@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Modal from './Modal';
+import ZoomImage from './ZoomImage';
 import './ScanSlip.css';
 import { readImageText, parseSlip, scoreFields } from '../utils/scan';
 import { itemFromTemplate, newId, todayISO } from '../utils/invoice';
@@ -13,23 +14,55 @@ const fileDateISO = (file) => {
   return local.toISOString().split('T')[0];
 };
 
+const FIELD_KEYS = ['truckNo', 'date', 'net', 'deliveredTo', 'fromLocation', 'toLocation'];
+
+/**
+ * Flow: upload photo(s) → each photo opens big & zoomable next to the boxes →
+ * the reader fills what it can in the background (never overwriting what you typed) →
+ * you check / type the values while zooming into the slip → Add to invoice.
+ */
 const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions, currentClientId, lastItem, onAdd, onClose }) => {
-  const [scans, setScans] = useState([]); // {id, file, url, status, progress, text, fields, error}
+  const [scans, setScans] = useState([]); // {id, file, url, rotate, status, progress, text, fields, found, touched}
+  const [activeId, setActiveId] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef(null);
   const cameraRef = useRef(null);
+  const netRef = useRef(null);
+  const addBtnRef = useRef(null);
   const busyRef = useRef(false);
   const scansRef = useRef(scans);
   scansRef.current = scans;
 
-  // Which item templates to create for each slip (default: the weight-based one, e.g. Transport)
   const defaultTpl = itemTemplates.find((t) => t.qtyFromWeight) || itemTemplates[0];
   const [chosen, setChosen] = useState(() => (defaultTpl ? { [defaultTpl.id]: true } : {}));
+  const [useDetectedClient, setUseDetectedClient] = useState(true);
 
   const patch = (id, p) => setScans((list) => list.map((s) => (s.id === id ? { ...s, ...p } : s)));
-  const patchFields = (id, p) => setScans((list) => list.map((s) => (s.id === id ? { ...s, fields: { ...s.fields, ...p } } : s)));
 
-  // Process the queue one image at a time
+  // Typing in a box marks it as "yours" — the reader will not overwrite it.
+  const setField = (id, key, value) =>
+    setScans((list) =>
+      list.map((s) =>
+        s.id === id ? { ...s, fields: { ...s.fields, [key]: value }, touched: { ...s.touched, [key]: true } } : s
+      )
+    );
+
+  const defaultsFor = useCallback(
+    (file) => ({
+      truckNo: settings.defaultTruckNo || '',
+      date: fileDateISO(file) || todayISO(),
+      net: '',
+      deliveredTo: (lastItem && lastItem.deliveredTo) || '',
+      fromLocation: (lastItem && lastItem.fromLocation) || '',
+      toLocation: (lastItem && lastItem.toLocation) || '',
+      gross: null,
+      tare: null,
+      clientId: '',
+    }),
+    [settings.defaultTruckNo, lastItem]
+  );
+
+  // ---- background reading, one photo at a time ---------------------------
   const runQueue = useCallback(async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -47,54 +80,66 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
               return !!(f.net && f.date);
             },
           });
-          // Pick the reading that found the most details
           let best = { text: texts[0] || '', fields: parse(texts[0] || '') };
           texts.slice(1).forEach((t) => {
             const f = parse(t);
             if (scoreFields(f) > scoreFields(best.fields)) best = { text: t, fields: f };
           });
           const f = best.fields;
-          const found = { truckNo: !!f.truckNo, date: !!f.date, net: !!f.net, deliveredTo: !!f.deliveredTo, fromLocation: !!f.fromLocation, toLocation: !!f.toLocation };
-          // Smart defaults for anything not found (most trips use the same truck & route)
-          const fields = {
-            ...f,
-            truckNo: f.truckNo || settings.defaultTruckNo || '',
-            date: f.date || fileDateISO(next.file) || todayISO(),
-            deliveredTo: f.deliveredTo || (lastItem && lastItem.deliveredTo) || '',
-            fromLocation: f.fromLocation || (lastItem && lastItem.fromLocation) || '',
-            toLocation: f.toLocation || (lastItem && lastItem.toLocation) || '',
-            net: f.net ?? '',
-          };
-          patch(next.id, { status: 'done', progress: 1, text: best.text, fields, found, nothingFound: scoreFields(f) < 2 });
+          setScans((list) =>
+            list.map((s) => {
+              if (s.id !== next.id) return s;
+              const fields = { ...s.fields, gross: f.gross, tare: f.tare, weightMismatch: f.weightMismatch, clientId: f.clientId };
+              const found = {};
+              FIELD_KEYS.forEach((k) => {
+                if (f[k] && !s.touched[k]) {
+                  fields[k] = f[k];
+                  found[k] = true;
+                }
+              });
+              return { ...s, status: 'done', progress: 1, text: best.text, fields, found, nothingFound: scoreFields(f) < 2 };
+            })
+          );
         } catch (e) {
           patch(next.id, { status: 'error', error: e.message || 'Could not read this image.' });
         }
-        // let React flush state before picking the next one
         await new Promise((r) => setTimeout(r, 30));
       }
     } finally {
       busyRef.current = false;
     }
-  }, [clients, suggestions.places, suggestions.deliveredTo, settings.defaultTruckNo, lastItem]);
+  }, [clients, suggestions.places, suggestions.deliveredTo]);
 
-  const addFiles = useCallback((files) => {
-    const imgs = Array.from(files || []).filter(isImage);
-    if (!imgs.length) return;
-    setScans((list) => [
-      ...list,
-      ...imgs.map((file) => ({ id: newId(), file, url: URL.createObjectURL(file), status: 'queued', progress: 0, text: '', fields: null })),
-    ]);
-  }, []);
+  const addFiles = useCallback(
+    (files) => {
+      const imgs = Array.from(files || []).filter(isImage);
+      if (!imgs.length) return;
+      const added = imgs.map((file) => ({
+        id: newId(),
+        file,
+        url: URL.createObjectURL(file),
+        rotate: 0,
+        status: 'queued',
+        progress: 0,
+        text: '',
+        fields: defaultsFor(file),
+        found: {},
+        touched: {},
+      }));
+      setScans((list) => [...list, ...added]);
+      setActiveId((cur) => cur || added[0].id);
+    },
+    [defaultsFor]
+  );
 
   useEffect(() => {
     if (initialFiles && initialFiles.length) addFiles(initialFiles);
-  }, [initialFiles, addFiles]);
+  }, [initialFiles]);
 
   useEffect(() => {
     if (scans.some((s) => s.status === 'queued')) runQueue();
   }, [scans, runQueue]);
 
-  // Paste screenshots straight into the window
   useEffect(() => {
     const onPaste = (e) => {
       const files = Array.from(e.clipboardData?.files || []);
@@ -109,31 +154,54 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
 
   useEffect(() => () => scansRef.current.forEach((s) => URL.revokeObjectURL(s.url)), []);
 
+  // ---- actions ------------------------------------------------------------
+  const remove = (id) => {
+    const i = scans.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    URL.revokeObjectURL(scans[i].url);
+    const rest = scans.filter((x) => x.id !== id);
+    setScans(rest);
+    if (activeId === id) setActiveId(rest.length ? rest[Math.min(i, rest.length - 1)].id : null);
+  };
+
   const rotateAndRetry = (id) =>
-    setScans((list) =>
-      list.map((s) => (s.id === id ? { ...s, rotate: ((s.rotate || 0) + 90) % 360, status: 'queued', progress: 0 } : s))
-    );
+    setScans((list) => list.map((s) => (s.id === id ? { ...s, rotate: ((s.rotate || 0) + 90) % 360, status: 'queued', progress: 0 } : s)));
 
-  const cls = (s, key) => (s.found && s.found[key] ? 'found' : s.fields[key] ? 'default' : 'missing');
+  const activeIndex = scans.findIndex((s) => s.id === activeId);
+  const active = scans[activeIndex];
 
-  const remove = (id) =>
-    setScans((list) => {
-      const s = list.find((x) => x.id === id);
-      if (s) URL.revokeObjectURL(s.url);
-      return list.filter((x) => x.id !== id);
-    });
+  const goTo = (i) => {
+    if (i >= 0 && i < scans.length) setActiveId(scans[i].id);
+  };
 
-  const ready = scans.filter((s) => s.status === 'done');
+  // Enter in the weight box → next slip (or the Add button on the last one)
+  const onFieldKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (activeIndex < scans.length - 1) goTo(activeIndex + 1);
+    else addBtnRef.current && addBtnRef.current.focus();
+  };
+
+  useEffect(() => {
+    // focus the weight box whenever a slip is opened
+    const t = setTimeout(() => netRef.current && netRef.current.focus({ preventScroll: true }), 60);
+    return () => clearTimeout(t);
+  }, [activeId]);
+
   const selectedTemplates = itemTemplates.filter((t) => chosen[t.id]);
-  const detectedClientId = ready.map((s) => s.fields.clientId).find(Boolean);
+  const detectedClientId = scans.map((s) => s.fields.clientId).find(Boolean);
   const detectedClient = clients.find((c) => c.id === detectedClientId);
-  const [useDetectedClient, setUseDetectedClient] = useState(true);
+  const missingWeight = selectedTemplates.some((t) => t.qtyFromWeight)
+    ? scans.filter((s) => !(parseFloat(s.fields.net) > 0)).length
+    : 0;
+  const itemCount = scans.length * selectedTemplates.length;
 
   const addToInvoice = () => {
+    if (missingWeight && !window.confirm(`${missingWeight} slip(s) have no net weight yet. Add anyway?`)) return;
     const items = [];
-    ready.forEach((s) => {
+    scans.forEach((s) => {
       const f = s.fields;
-      const net = parseFloat(f.net) || 0;
+      const net = parseFloat(String(f.net).replace(/,/g, '')) || 0;
       selectedTemplates.forEach((t) => {
         const base = itemFromTemplate(t, settings, null);
         const item = {
@@ -164,7 +232,18 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
     addFiles(e.dataTransfer.files);
   };
 
-  const itemCount = ready.length * selectedTemplates.length;
+  const cls = (s, key) => (s.found[key] ? 'found' : s.touched[key] ? 'typed' : s.fields[key] ? 'default' : 'missing');
+
+  const statusLabel = (s) =>
+    s.status === 'queued'
+      ? 'Waiting to read…'
+      : s.status === 'reading'
+      ? `Reading… ${Math.round(s.progress * 100)}%`
+      : s.status === 'error'
+      ? 'Could not read'
+      : s.nothingFound
+      ? 'Read — please type the values'
+      : 'Read ✓';
 
   return (
     <Modal
@@ -174,10 +253,11 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
       footer={
         <>
           <span className="muted grow-left">
-            {scans.length > 0 && `${ready.length} of ${scans.length} read`}
+            {scans.length > 0 && `${scans.length} slip${scans.length === 1 ? '' : 's'}`}
+            {missingWeight > 0 && <span className="warn"> · {missingWeight} without weight</span>}
           </span>
           <button className="btn btn-light" onClick={onClose}>Cancel</button>
-          <button className="btn btn-success" disabled={!itemCount} onClick={addToInvoice}>
+          <button ref={addBtnRef} className="btn btn-success" disabled={!itemCount} onClick={addToInvoice}>
             Add {itemCount || ''} item{itemCount === 1 ? '' : 's'} to invoice
           </button>
         </>
@@ -189,21 +269,18 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
-        <div className="dropzone-icon">🧾</div>
+        {!scans.length && <div className="dropzone-icon">🧾</div>}
         <div>
           <strong>
-            {scans.length
-              ? `${scans.length} photo${scans.length === 1 ? '' : 's'} added — add as many more as you like`
-              : 'Add photos of weighbridge slips, challans or bills'}
+            {scans.length ? 'Add more slips' : 'Add photos of weighbridge slips, challans or bills'}
           </strong>
           <div className="muted">
-            Select many at once (Ctrl+click on computer, long-press on phone), drag &amp; drop, or paste (Ctrl+V).
-            Each photo becomes its own trip.
+            Select many at once, drag &amp; drop, or paste (Ctrl+V). Each photo opens big so you can zoom in and type the values.
           </div>
         </div>
         <div className="dropzone-buttons">
           <button className="btn" onClick={() => fileRef.current.click()}>
-            {scans.length ? '＋ Add more photos' : '🖼 Choose photos'}
+            {scans.length ? '＋ Add photos' : '🖼 Choose photos'}
           </button>
           <button className="btn btn-light camera-btn" onClick={() => cameraRef.current.click()}>
             {scans.length ? '📷 Take another' : '📷 Take photo'}
@@ -231,79 +308,103 @@ const ScanSlip = ({ initialFiles, clients, settings, itemTemplates, suggestions,
             )}
           </div>
 
-          <div className="scan-list">
-            {scans.map((s) => (
-              <div key={s.id} className={`scan-card status-${s.status}`}>
-                <div className="scan-thumb">
-                  <a href={s.url} target="_blank" rel="noreferrer" title="Open full image">
-                    <img src={s.url} alt="Uploaded slip" style={{ transform: `rotate(${s.rotate || 0}deg)` }} />
-                  </a>
-                  <button className="scan-remove" onClick={() => remove(s.id)} title="Remove">✕</button>
-                  {(s.status === 'done' || s.status === 'error') && (
-                    <button className="scan-rotate" onClick={() => rotateAndRetry(s.id)} title="Rotate the photo 90° and read it again">↻ Rotate &amp; re-read</button>
-                  )}
+          {scans.length > 1 && (
+            <div className="scan-thumbs">
+              {scans.map((s, i) => (
+                <button
+                  key={s.id}
+                  className={`scan-thumb-btn ${s.id === activeId ? 'active' : ''} ${parseFloat(s.fields.net) > 0 ? 'ok' : 'todo'}`}
+                  onClick={() => setActiveId(s.id)}
+                  title={`Slip ${i + 1}`}
+                >
+                  <img src={s.url} alt="" style={{ transform: `rotate(${s.rotate}deg)` }} />
+                  <span className="num">{i + 1}</span>
+                  <span className="dot" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {active && (
+            <div className="scan-panel" key={active.id}>
+              <div className="scan-viewer">
+                <ZoomImage src={active.url} rotate={active.rotate} onRotate={() => rotateAndRetry(active.id)} />
+              </div>
+
+              <div className="scan-form">
+                <div className="scan-form-head">
+                  <strong>Slip {activeIndex + 1} of {scans.length}</strong>
+                  <span className={`scan-status status-${active.status}`}>{statusLabel(active)}</span>
+                </div>
+                {(active.status === 'queued' || active.status === 'reading') && (
+                  <div className="progress thin"><div style={{ width: `${Math.round(active.progress * 100)}%` }} /></div>
+                )}
+                {active.status === 'error' && <div className="scan-error">⚠ {active.error} — you can still type the values.</div>}
+                {active.status === 'done' && active.nothingFound && (
+                  <div className="scan-hint">
+                    Couldn't read the values (handwritten slips can't be read reliably). Zoom into the photo and type the
+                    <strong> net weight</strong> — truck, date and places are pre-filled.
+                  </div>
+                )}
+
+                <div className="scan-grid">
+                  <label className="span-2 big">Net weight (kg)
+                    <input
+                      ref={netRef}
+                      inputMode="decimal"
+                      placeholder="e.g. 29065"
+                      className={cls(active, 'net')}
+                      value={active.fields.net ?? ''}
+                      onChange={(e) => setField(active.id, 'net', e.target.value.replace(/[^\d.,]/g, ''))}
+                      onKeyDown={onFieldKeyDown}
+                    />
+                  </label>
+                  <label>Truck no
+                    <input list="dl-trucks" className={cls(active, 'truckNo')} value={active.fields.truckNo} onChange={(e) => setField(active.id, 'truckNo', e.target.value.toUpperCase())} onKeyDown={onFieldKeyDown} />
+                  </label>
+                  <label>Date
+                    <input type="date" className={cls(active, 'date')} value={active.fields.date} onChange={(e) => setField(active.id, 'date', e.target.value)} />
+                  </label>
+                  <label className="span-2">Delivered to
+                    <input list="dl-delivered" className={cls(active, 'deliveredTo')} value={active.fields.deliveredTo} onChange={(e) => setField(active.id, 'deliveredTo', e.target.value)} onKeyDown={onFieldKeyDown} />
+                  </label>
+                  <label>From
+                    <input list="dl-places" className={cls(active, 'fromLocation')} value={active.fields.fromLocation} onChange={(e) => setField(active.id, 'fromLocation', e.target.value)} onKeyDown={onFieldKeyDown} />
+                  </label>
+                  <label>To
+                    <input list="dl-places" className={cls(active, 'toLocation')} value={active.fields.toLocation} onChange={(e) => setField(active.id, 'toLocation', e.target.value)} onKeyDown={onFieldKeyDown} />
+                  </label>
                 </div>
 
-                <div className="scan-body">
-                  {(s.status === 'queued' || s.status === 'reading') && (
-                    <div className="scan-progress">
-                      <div className="muted">{s.status === 'queued' ? 'Waiting…' : 'Reading the image…'}</div>
-                      <div className="progress"><div style={{ width: `${Math.round(s.progress * 100)}%` }} /></div>
-                      <div className="skeleton" /><div className="skeleton short" />
-                    </div>
-                  )}
+                {(active.fields.gross || active.fields.tare) && (
+                  <div className="muted">
+                    Gross {active.fields.gross ?? '—'} kg · Tare {active.fields.tare ?? '—'} kg
+                    {active.fields.weightMismatch && <span className="warn"> · Net doesn't match gross − tare, please check</span>}
+                  </div>
+                )}
 
-                  {s.status === 'error' && <div className="scan-error">⚠ {s.error}</div>}
+                <p className="muted legend-row">
+                  <span className="legend found">Read from photo</span>
+                  <span className="legend default">Pre-filled</span>
+                  <span className="legend typed">Typed by you</span>
+                  <span className="legend missing">To fill</span>
+                </p>
 
-                  {s.status === 'done' && (
-                    <>
-                      {s.nothingFound && (
-                        <div className="scan-hint">
-                          Couldn't read the details from this photo — handwritten slips can't be read reliably.
-                          Truck, date and places are pre-filled; just type the <strong>net weight</strong>.
-                          For printed slips, try <em>↻ Rotate &amp; re-read</em> or a closer, straighter photo.
-                        </div>
-                      )}
-                      <div className="scan-grid">
-                        <label>Truck no
-                          <input className={cls(s, 'truckNo')} list="dl-trucks" value={s.fields.truckNo} onChange={(e) => patchFields(s.id, { truckNo: e.target.value.toUpperCase() })} />
-                        </label>
-                        <label>Date
-                          <input type="date" className={cls(s, 'date')} value={s.fields.date} onChange={(e) => patchFields(s.id, { date: e.target.value })} />
-                        </label>
-                        <label>Net weight (kg)
-                          <input inputMode="decimal" autoFocus={!s.found.net && s.nothingFound} placeholder="e.g. 29065" className={cls(s, 'net')} value={s.fields.net ?? ''} onChange={(e) => patchFields(s.id, { net: e.target.value })} />
-                        </label>
-                        <label>Delivered to
-                          <input list="dl-delivered" className={cls(s, 'deliveredTo')} value={s.fields.deliveredTo} onChange={(e) => patchFields(s.id, { deliveredTo: e.target.value })} />
-                        </label>
-                        <label>From
-                          <input list="dl-places" className={cls(s, 'fromLocation')} value={s.fields.fromLocation} onChange={(e) => patchFields(s.id, { fromLocation: e.target.value })} />
-                        </label>
-                        <label>To
-                          <input list="dl-places" className={cls(s, 'toLocation')} value={s.fields.toLocation} onChange={(e) => patchFields(s.id, { toLocation: e.target.value })} />
-                        </label>
-                      </div>
-                      {(s.fields.gross || s.fields.tare) && (
-                        <div className="muted">
-                          Gross {s.fields.gross ?? '—'} kg · Tare {s.fields.tare ?? '—'} kg
-                          {s.fields.weightMismatch && <span className="warn"> · Net doesn't match gross − tare, please check</span>}
-                        </div>
-                      )}
-                      <details className="scan-text">
-                        <summary>Show text read from image</summary>
-                        <pre>{s.text.trim() || '(no text found — try a sharper, straighter photo)'}</pre>
-                      </details>
-                    </>
-                  )}
+                {active.text && (
+                  <details className="scan-text">
+                    <summary>Show text read from image</summary>
+                    <pre>{active.text.trim() || '(no text found)'}</pre>
+                  </details>
+                )}
+
+                <div className="scan-nav">
+                  <button className="btn btn-sm btn-light" disabled={activeIndex <= 0} onClick={() => goTo(activeIndex - 1)}>← Previous</button>
+                  <button className="btn btn-sm btn-danger" onClick={() => remove(active.id)}>Remove slip</button>
+                  <button className="btn btn-sm" disabled={activeIndex >= scans.length - 1} onClick={() => goTo(activeIndex + 1)}>Next →</button>
                 </div>
               </div>
-            ))}
-          </div>
-          <p className="muted">
-            <span className="legend found">Read from photo</span> <span className="legend default">Pre-filled default</span>{' '}
-            <span className="legend missing">Please fill in</span> — give it a quick check before adding.
-          </p>
+            </div>
+          )}
         </>
       )}
     </Modal>

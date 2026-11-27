@@ -310,3 +310,259 @@
   border-color: #f0d27a;
   background: #fffbea;
 }
+
+/* ---------- Zoom-first layout ---------- */
+.modal-wide:has(.scan-panel) {
+  max-width: 1200px;
+}
+
+.scan-thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+}
+
+.scan-thumb-btn {
+  position: relative;
+  flex: 0 0 64px;
+  height: 78px;
+  padding: 0;
+  border: 2px solid var(--border, #dde1ea);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.scan-thumb-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-thumb-btn.active {
+  border-color: var(--primary, #4f46e5);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.3);
+}
+
+.scan-thumb-btn .num {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
+.scan-thumb-btn .dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #f0b429;
+}
+
+.scan-thumb-btn.ok .dot {
+  background: #22c55e;
+}
+
+.scan-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 16px;
+  animation: pop-in 0.25s ease-out;
+}
+
+.zoom-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zoom-box {
+  position: relative;
+  height: min(62vh, 560px);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1f2333;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.zoom-box:active {
+  cursor: grabbing;
+}
+
+.zoom-box img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.zoom-controls button {
+  min-width: 40px;
+  height: 36px;
+  border: 1px solid var(--border, #dde1ea);
+  background: #fff;
+  border-radius: 9px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 10px;
+  color: var(--text, #1f2333);
+}
+
+.zoom-controls button:hover {
+  background: var(--primary-soft, #eef2ff);
+}
+
+.zoom-controls span {
+  min-width: 52px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-2, #555);
+  font-variant-numeric: tabular-nums;
+}
+
+.zoom-tip {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-2, #777);
+}
+
+.scan-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scan-form-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.scan-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef0f5;
+  color: #555;
+}
+
+.scan-status.status-done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.scan-status.status-reading {
+  background: var(--primary-soft, #eef2ff);
+  color: var(--primary-dark, #3730a3);
+}
+
+.scan-status.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.progress.thin {
+  height: 5px;
+  border-radius: 99px;
+  background: #eceef4;
+  overflow: hidden;
+}
+
+.progress.thin div {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary, #4f46e5), #22c1c3);
+  transition: width 0.3s;
+}
+
+.scan-form .scan-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.scan-grid .span-2 {
+  grid-column: span 2;
+}
+
+.scan-grid label.big input {
+  font-size: 22px;
+  font-weight: 700;
+  padding: 10px 12px;
+  letter-spacing: 0.5px;
+}
+
+.scan-grid input.typed {
+  border-color: #a78bfa;
+  background: #faf5ff;
+}
+
+.legend.typed {
+  border-color: #a78bfa;
+  background: #faf5ff;
+}
+
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.scan-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+@media (max-width: 760px) {
+  .scan-panel {
+    grid-template-columns: 1fr;
+  }
+  .zoom-box {
+    height: 48vh;
+  }
+  .scan-form .scan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.zoom-box {
+  height: min(calc(100vh - 430px), 560px);
+  min-height: 280px;
+}
+
+@media (max-width: 760px) {
+  .zoom-box {
+    height: 42vh;
+    min-height: 240px;
+  }
+}
