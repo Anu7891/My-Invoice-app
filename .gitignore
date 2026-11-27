@@ -30,3 +30,6 @@ yarn-error.log*
 
 # OS generated files
 Thumbs.db
+
+# OCR files copied from node_modules by scripts/copy-ocr-assets.js
+/public/ocr

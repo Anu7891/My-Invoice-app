@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import './InvoiceEditor.css';
 import {
   addDaysISO,
+  calcTotals,
   formatCurrency,
   itemAmount,
   itemFromTemplate,
   makeItem,
   newId,
+  num,
+  priceOptions,
   weightToTons,
 } from '../utils/invoice';
 
@@ -16,6 +19,48 @@ const Field = ({ label, children, className = '' }) => (
     {children}
   </div>
 );
+
+/** Dropdown of common prices + "Custom…" to type any other amount. */
+const PricePicker = ({ value, options, onChange, placeholder }) => {
+  const str = String(value ?? '').trim();
+  const inList = str !== '' && options.some((o) => o === num(str));
+  const [custom, setCustom] = useState(!inList && str !== '');
+  const showInput = custom || (!inList && str !== '') || options.length === 0;
+
+  return (
+    <div className="price-picker">
+      {options.length > 0 && (
+        <select
+          value={showInput ? 'custom' : inList ? String(num(str)) : ''}
+          onChange={(e) => {
+            if (e.target.value === 'custom') {
+              setCustom(true);
+            } else {
+              setCustom(false);
+              onChange(e.target.value);
+            }
+          }}
+        >
+          <option value="">Select price…</option>
+          {options.map((o) => (
+            <option key={o} value={String(o)}>₹{o}</option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+      )}
+      {showInput && (
+        <input
+          type="text"
+          inputMode="decimal"
+          autoFocus={custom && str === ''}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      )}
+    </div>
+  );
+};
 
 const InvoiceEditor = ({
   invoice,
@@ -28,8 +73,10 @@ const InvoiceEditor = ({
   onSaveClient,
   onSaveTemplate,
   onOpenSettings,
+  onOpenScan,
 }) => {
   const [collapsed, setCollapsed] = useState({});
+  const [drag, setDrag] = useState({ from: null, over: null, after: false });
 
   const update = (field, value) => setInvoice((prev) => ({ ...prev, [field]: value }));
   const bind = (field) => ({ value: invoice[field] ?? '', onChange: (e) => update(field, e.target.value) });
@@ -128,6 +175,26 @@ const InvoiceEditor = ({
   const removeExtra = (id, extraId) =>
     setItems((items) => items.map((it) => (it.id === id ? { ...it, extraDetails: it.extraDetails.filter((d) => d.id !== extraId) } : it)));
 
+  // Drag & drop reordering (desktop). Phones use the ↑ ↓ buttons.
+  const dropItem = () => {
+    const { from, over, after } = drag;
+    setDrag({ from: null, over: null, after: false });
+    if (from === null || over === null) return;
+    setItems((items) => {
+      const fromIdx = items.findIndex((it) => it.id === from);
+      let toIdx = items.findIndex((it) => it.id === over);
+      if (fromIdx < 0 || toIdx < 0 || from === over) return items;
+      const next = [...items];
+      const [moved] = next.splice(fromIdx, 1);
+      toIdx = next.findIndex((it) => it.id === over) + (after ? 1 : 0);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+  };
+
+  const totals = calcTotals(invoice);
+  const prices = priceOptions(settings);
+
   const allCollapsed = invoice.items.length > 0 && invoice.items.every((it) => collapsed[it.id]);
   const toggleAll = () =>
     setCollapsed(allCollapsed ? {} : Object.fromEntries(invoice.items.map((it) => [it.id, true])));
@@ -218,12 +285,48 @@ const InvoiceEditor = ({
         </div>
 
         <div className="items-container">
-          {invoice.items.length === 0 && <p className="muted">No items yet — use the buttons below to add one.</p>}
+          {invoice.items.length === 0 && (
+            <div className="empty-items">
+              <div className="big">🧾</div>
+              <div>No items yet. Add one below, or scan a photo of a slip and let the app fill it in.</div>
+            </div>
+          )}
           {invoice.items.map((item, index) => {
             const isCollapsed = !!collapsed[item.id];
+            const dropClass =
+              drag.over === item.id && drag.from !== item.id ? (drag.after ? ' drop-after' : ' drop-before') : '';
             return (
-              <div key={item.id} className="item-row">
+              <div
+                key={item.id}
+                className={`item-row${isCollapsed ? ' collapsed' : ''}${drag.from === item.id ? ' dragging' : ''}${dropClass}`}
+                onDragOver={(e) => {
+                  if (drag.from === null) return;
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const after = e.clientY > r.top + r.height / 2;
+                  if (drag.over !== item.id || drag.after !== after) setDrag((d) => ({ ...d, over: item.id, after }));
+                }}
+                onDrop={(e) => {
+                  if (drag.from === null) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  dropItem();
+                }}
+              >
                 <div className="item-header">
+                  <span
+                    className="drag-handle"
+                    draggable
+                    title="Drag to reorder"
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', item.id);
+                      setDrag({ from: item.id, over: null, after: false });
+                    }}
+                    onDragEnd={() => setDrag({ from: null, over: null, after: false })}
+                  >
+                    ⋮⋮
+                  </span>
                   <button
                     className="item-toggle"
                     onClick={() => setCollapsed((c) => ({ ...c, [item.id]: !c[item.id] }))}
@@ -318,12 +421,11 @@ const InvoiceEditor = ({
                         />
                       </Field>
                       <Field label={item.isFixedPrice ? 'Fixed Price (₹):' : 'Price (₹):'}>
-                        <input
-                          type="text"
-                          inputMode="decimal"
+                        <PricePicker
                           value={item.price}
-                          onChange={(e) => updateItem(item.id, 'price', e.target.value)}
-                          placeholder={item.isFixedPrice ? 'Enter fixed amount' : 'Price per unit'}
+                          options={prices}
+                          onChange={(v) => updateItem(item.id, 'price', v)}
+                          placeholder={item.isFixedPrice ? 'Enter fixed amount' : 'Type price per unit'}
                         />
                       </Field>
                     </div>
@@ -342,6 +444,9 @@ const InvoiceEditor = ({
 
         <div className="quick-add">
           <span className="muted">Add:</span>
+          {onOpenScan && (
+            <button className="btn btn-sm btn-scan" onClick={onOpenScan} title="Read a weighbridge slip / challan photo">📷 From photo</button>
+          )}
           {itemTemplates.map((t) => (
             <button key={t.id} className="btn btn-sm" onClick={() => addFromTemplate(t)} title={`₹${t.price}${t.isFixedPrice ? ' fixed' : ' per unit'}`}>
               + {t.title}
@@ -351,6 +456,15 @@ const InvoiceEditor = ({
           <button className="btn btn-sm btn-light" onClick={() => onOpenSettings('items')} title="Edit quick-add buttons">⚙</button>
         </div>
         {lastItem && <p className="muted small-note">New items copy the delivery details of the last item.</p>}
+        {invoice.items.length > 0 && (
+          <div className="items-total">
+            <span>
+              {invoice.items.length} item{invoice.items.length === 1 ? '' : 's'}
+              {totals.taxRate > 0 ? ` + ${settings.taxLabel || 'Tax'} ${totals.taxRate}%` : ''}
+            </span>
+            <strong key={totals.total} className="bump">{formatCurrency(totals.total)}</strong>
+          </div>
+        )}
       </div>
 
       {/* Notes */}

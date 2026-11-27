@@ -31,6 +31,21 @@ export const DEFAULT_SETTINGS = {
   agreementText:
     'By signing this document, the customer agrees to the services and conditions described in this document.',
   defaultTruckNo: 'GJ21T5475',
+  // Price dropdown options: ₹300, 350, 400 … 900 (+ "Custom…" to type any value)
+  priceMin: 300,
+  priceMax: 900,
+  priceStep: 50,
+};
+
+/** List of price options for the dropdown, from the settings. */
+export const priceOptions = (settings) => {
+  const min = Number(settings.priceMin);
+  const max = Number(settings.priceMax);
+  const step = Number(settings.priceStep);
+  if (!(step > 0) || !(max >= min) || (max - min) / step > 200) return [];
+  const out = [];
+  for (let v = min; v <= max + 1e-9; v += step) out.push(Math.round(v * 100) / 100);
+  return out;
 };
 
 export const DEFAULT_CLIENTS = [

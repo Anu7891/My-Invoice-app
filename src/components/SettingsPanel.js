@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import Modal from './Modal';
-import { formatInvoiceNumber, newId } from '../utils/invoice';
+import { formatInvoiceNumber, newId, priceOptions } from '../utils/invoice';
 import { exportAllData, importAllData } from '../utils/storage';
 import { downloadJSON } from '../utils/exportInvoice';
 
@@ -83,6 +83,9 @@ const SettingsPanel = ({ settings, itemTemplates, onSave, onClose, initialTab = 
       numberPadding: Math.max(0, parseInt(s.numberPadding, 10) || 0),
       dueDays: Math.max(0, parseInt(s.dueDays, 10) || 0),
       defaultTaxRate: Math.max(0, parseFloat(s.defaultTaxRate) || 0),
+      priceMin: parseFloat(s.priceMin) || 0,
+      priceMax: parseFloat(s.priceMax) || 0,
+      priceStep: parseFloat(s.priceStep) || 0,
     };
     onSave(cleaned, templates.filter((t) => t.title.trim()));
     onClose();
@@ -159,6 +162,15 @@ const SettingsPanel = ({ settings, itemTemplates, onSave, onClose, initialTab = 
             {input('Payment due after (days)', s.dueDays, (v) => setTop('dueDays', v), { type: 'number' })}
             {input('Default truck no. for new items', s.defaultTruckNo, (v) => setTop('defaultTruckNo', v))}
           </div>
+          <div className="form-row">
+            {input('Price list from (₹)', s.priceMin, (v) => setTop('priceMin', v), { type: 'number' })}
+            {input('Price list to (₹)', s.priceMax, (v) => setTop('priceMax', v), { type: 'number' })}
+            {input('Step (₹)', s.priceStep, (v) => setTop('priceStep', v), { type: 'number' })}
+          </div>
+          <p className="muted">
+            Price dropdown will show:{' '}
+            <strong>{priceOptions(s).length ? priceOptions(s).map((p) => `₹${p}`).join(', ') : '(no list — price is typed)'}</strong>, plus "Custom…" to type any value.
+          </p>
           <div className="form-row">
             {input('Default tax rate (%)', s.defaultTaxRate, (v) => setTop('defaultTaxRate', v), { type: 'number', hint: 'Leave 0 for no tax line' })}
             {input('Tax label', s.taxLabel, (v) => setTop('taxLabel', v), { hint: 'e.g. GST, IGST' })}
